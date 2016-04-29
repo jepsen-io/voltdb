@@ -41,6 +41,16 @@
         (c/cd base-dir
               (c/exec :echo (deployment-xml test) :> "deployment.xml"))))
 
+(defn await-initialization
+  "Blocks until the logfile reports 'Server completed initialization'."
+  [node]
+  (info "Waiting for" node "to initialize")
+  (c/cd base-dir
+        (c/exec :tail :-f "stdout.log"
+                | :grep :-m 1 "completed initialization"
+                | :xargs (c/lit "echo \"\" >> stdout.log \\;")))
+  (info node "initialized"))
+
 (defn start!
   "Starts voltdb"
   [node test]
@@ -51,7 +61,8 @@
                       (str base-dir "/bin/voltdb")
                       :create
                       :--deployment (str base-dir "/deployment.xml")
-                      :--host (jepsen/primary test))))
+                      :--host (jepsen/primary test))
+    (Thread/sleep 5000)))
 
 (defn stop!
   "Stops voltdb"
@@ -67,12 +78,13 @@
       (doto node
         (install! url)
         (configure! test)
-        (start! test)))
+        (start! test)
+        (await-initialization)))
 
     (teardown! [_ test node]
+      (stop! node)
       (c/su
-;        (c/exec :rm :-rf (c/lit (str base-dir "/*")))))))
-    ))
+        (c/exec :rm :-rf (c/lit (str base-dir "/*")))))
 
     db/LogFiles
     (log-files [db test node]
