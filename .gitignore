@@ -1,0 +1,15 @@
+.lein-repl-history
+pom.xml
+pom.xml.asc
+repl-port
+*~
+.*.swp
+*.log
+lib
+classes
+build
+.lein-deps-sum
+.lein-failures
+target/**
+checkouts/**
+store/**
