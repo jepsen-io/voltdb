@@ -2,12 +2,16 @@
   (:require [jepsen [core       :as jepsen]
                     [db         :as db]
                     [control    :as c :refer [|]]
+                    [client     :as client]
                     [tests      :as tests]]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
             [clojure.string :as str]
             [clojure.data.xml :as xml]
-            [clojure.tools.logging :refer [info warn]]))
+            [clojure.tools.logging :refer [info warn]])
+  (:import (org.voltdb.client Client
+                              ClientConfig
+                              ClientFactory)))
 
 (def username "voltdb")
 (def base-dir "/opt/voltdb")
@@ -83,18 +87,72 @@
 
     (teardown! [_ test node]
       (stop! node)
-      (c/su
-        (c/exec :rm :-rf (c/lit (str base-dir "/*")))))
+      (c/su))
+;        (c/exec :rm :-rf (c/lit (str base-dir "/*")))))
 
     db/LogFiles
     (log-files [db test node]
       [(str base-dir "/stdout.log")
        (str base-dir "/log/volt.log")])))
 
+(defn sql-cmd!
+  "Takes an SQL query and runs it on the local node via sqlcmd"
+  [query]
+  (c/cd base-dir
+        (c/sudo username
+                (c/exec "bin/sqlcmd" (str "--query=" query)))))
+
+(defn connect
+  "Opens a connection to the given node and returns a voltdb client."
+  [node]
+  (-> (doto (ClientConfig. "" "")
+        (.setReconnectOnConnectionLoss true))
+      (ClientFactory/createClient)
+      (doto
+        (.createConnection (name node)))))
+
+(defn client
+  "A single-register client."
+  ([] (client nil))
+  ([conn]
+   (let [initialized? (promise)]
+     (reify client/Client
+       (setup! [_ test node]
+         (c/on node
+               (try
+                 ; Create table
+                 (sql-cmd! "CREATE TABLE registers (
+                           id          INTEGER UNIQUE NOT NULL,
+                           value       INTEGER NOT NULL,
+                           PRIMARY KEY (id)
+                           );
+                           PARTITION TABLE registers ON COLUMN id;")
+                 (info node "table created")
+
+                 (catch RuntimeException e
+                   ; No IF NOT EXISTS clause for table creation
+                   (when-not (re-find #"already exists" (.getMessage e))
+                     (throw e))))
+
+               ; Install stored procedures
+               (when (deliver initialized? true)
+                 (c/upload "procedures/jepsen-procedures.jar"
+                           (str base-dir "/jepsen-procedures.jar"))
+                 (sql-cmd! "load classes jepsen-procedures.jar")
+                 (sql-cmd! "CREATE PROCEDURE FROM CLASS jepsen.procedures.ReadAll")))
+
+         (client (connect node)))
+
+       (invoke! [this test op])
+
+       (teardown! [_ test]
+         (.close conn))))))
+
 (defn voltdb-test
   "Takes a tarball URL"
   [url]
   (assoc tests/noop-test
-         :name "voltdb"
-         :os   debian/os
-         :db   (db url)))
+         :name    "voltdb"
+         :os      debian/os
+         :client  (client)
+         :db      (db url)))
