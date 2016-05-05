@@ -1,17 +1,18 @@
 (ns jepsen.voltdb
-  (:require [jepsen [core       :as jepsen]
-                    [db         :as db]
-                    [control    :as c :refer [|]]
-                    [checker    :as checker]
-                    [client     :as client]
-                    [generator  :as gen]
-                    [nemesis    :as nemesis]
-                    [tests      :as tests]]
+  (:require [jepsen [core         :as jepsen]
+                    [db           :as db]
+                    [control      :as c :refer [|]]
+                    [checker      :as checker]
+                    [client       :as client]
+                    [generator    :as gen]
+                    [independent  :as independent]
+                    [nemesis      :as nemesis]
+                    [tests        :as tests]]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
-            [knossos.model :as model]
-            [clojure.string :as str]
-            [clojure.data.xml :as xml]
+            [knossos.model        :as model]
+            [clojure.string       :as str]
+            [clojure.data.xml     :as xml]
             [clojure.tools.logging :refer [info warn]])
   (:import (org.voltdb VoltTable
                        VoltTableRow)
@@ -169,6 +170,15 @@
   [client & args]
   (apply call! client "@AdHoc" args))
 
+(defn install-stored-procedures!
+  "Uploads stored procedures jar and loads it into VoltDB"
+  [node]
+  (c/on node
+        (c/upload "procedures/jepsen-procedures.jar"
+                  (str base-dir "/jepsen-procedures.jar"))
+        (sql-cmd! "load classes jepsen-procedures.jar")
+        (sql-cmd! "CREATE PROCEDURE FROM CLASS jepsen.procedures.ReadAll")))
+
 (defn client
   "A single-register client."
   ([] (client nil))
@@ -186,40 +196,35 @@
                              PRIMARY KEY (id)
                              );
                              PARTITION TABLE registers ON COLUMN id;")
-                   (info node "table created")
-
-                   ; Install stored procedures
-                   (c/upload "procedures/jepsen-procedures.jar"
-                             (str base-dir "/jepsen-procedures.jar"))
-                   (sql-cmd! "load classes jepsen-procedures.jar")
-                   (sql-cmd! "CREATE PROCEDURE FROM CLASS jepsen.procedures.ReadAll")
-                   (call! conn "REGISTERS.upsert" 0 0)))
-
+                   (info node "table created")))
            (client conn)))
 
        (invoke! [this test op]
-         (case (:f op)
-           :read   (assoc op
-                          :type :ok
-                          :value (-> conn
-                                     (call! "REGISTERS.select" 0)
-                                     first
-                                     :rows
-                                     first
-                                     :VALUE))
-           :write (do (call! conn "REGISTERS.upsert" 0 (:value op))
-                      (assoc op :type :ok))
-           :cas   (let [[v v'] (:value op)
-                        res (-> conn
-                                (ad-hoc! "UPDATE registers SET value = ?
-                                         WHERE id = ? AND value = ?"
-                                         v' 0 v)
-                                first
-                                :rows
-                                first
-                                :modified_tuples)]
-                    (assert (#{0 1} res))
-                    (assoc op :type (if (zero? res) :fail :ok)))))
+         (let [id     (key (:value op))
+               value  (val (:value op))]
+           (case (:f op)
+             :read   (let [v (-> conn
+                                 (call! "REGISTERS.select" id)
+                                 first
+                                 :rows
+                                 first
+                                 :VALUE)]
+                           (assoc op
+                                  :type :ok
+                                  :value (independent/tuple id v)))
+             :write (do (call! conn "REGISTERS.upsert" id value)
+                        (assoc op :type :ok))
+             :cas   (let [[v v'] value
+                          res (-> conn
+                                  (ad-hoc! "UPDATE registers SET value = ?
+                                           WHERE id = ? AND value = ?"
+                                           v' id v)
+                                  first
+                                  :rows
+                                  first
+                                  :modified_tuples)]
+                      (assert (#{0 1} res))
+                      (assoc op :type (if (zero? res) :fail :ok))))))
 
        (teardown! [_ test]
          (.close conn))))))
@@ -237,11 +242,19 @@
          :client  (client)
          :db      (db url)
          :model   (model/cas-register 0)
-         :checker (checker/compose {:linear checker/linearizable
-                                    :perf   (checker/perf)})
+         :checker (checker/compose
+                    {:linear (independent/checker checker/linearizable)
+                     :perf   (checker/perf)})
          :nemesis (nemesis/partition-random-halves)
-         :generator (->> (gen/mix [r w cas])
-                         (gen/stagger 1)
+         :concurrency 100
+         :generator (->> (independent/concurrent-generator
+                           10
+                           (range)
+                           (fn [id]
+                             (->> (gen/mix [w cas])
+                                  (gen/reserve 5 r)
+                                  (gen/delay 1)
+                                  (gen/time-limit 30))))
                          (gen/nemesis
                            (gen/seq (cycle [(gen/sleep 30)
                                             {:type :info :f :start}
