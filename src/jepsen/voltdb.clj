@@ -13,6 +13,7 @@
             [knossos.model        :as model]
             [clojure.string       :as str]
             [clojure.data.xml     :as xml]
+            [clojure.java.shell   :refer [sh]]
             [clojure.tools.logging :refer [info warn]])
   (:import (org.voltdb VoltTable
                        VoltTableRow)
@@ -63,6 +64,35 @@
                 | :xargs (c/lit "echo \"\" >> stdout.log \\;")))
   (info node "initialized"))
 
+(defn sql-cmd!
+  "Takes an SQL query and runs it on the local node via sqlcmd"
+  [query]
+  (c/cd base-dir
+        (c/sudo username
+                (c/exec "bin/sqlcmd" (str "--query=" query)))))
+
+(defn build-stored-procedures!
+  "Compiles and packages stored procedures in procedures/"
+  []
+  (let [r (sh "bash" "-c" "javac -classpath \"./:./*\" -d ./obj *.java"
+              :dir "procedures/")]
+    (when-not (zero? (:exit r))
+      (throw (RuntimeException. (str "STDOUT:\n" (:out r)
+                                     "\n\nSTDERR:\n" (:err r))))))
+  (let [r (sh "jar" "cvf" "jepsen-procedures.jar" "-C" "obj" "."
+              :dir "procedures/")]
+    (when-not (zero? (:exit r))
+      (throw (RuntimeException. (str "STDOUT:\n" (:out r)
+                                     "\n\nSTDERR:\n" (:err r)))))))
+
+
+(defn install-stored-procedures!
+  "Uploads stored procedures jar and loads it into VoltDB"
+  []
+  (c/upload "procedures/jepsen-procedures.jar"
+            (str base-dir "/jepsen-procedures.jar"))
+  (sql-cmd! "load classes jepsen-procedures.jar"))
+
 (defn start!
   "Starts voltdb"
   [node test]
@@ -91,7 +121,15 @@
         (install! url)
         (configure! test)
         (start! test)
-        (await-initialization)))
+        (await-initialization))
+
+      ; Wait for convergence
+      (jepsen/synchronize test)
+
+      ; Stored procedures
+      (when (= node (jepsen/primary test))
+        (build-stored-procedures!)
+        (install-stored-procedures!)))
 
     (teardown! [_ test node]
       (stop! node)
@@ -102,13 +140,6 @@
     (log-files [db test node]
       [(str base-dir "/stdout.log")
        (str base-dir "/log/volt.log")])))
-
-(defn sql-cmd!
-  "Takes an SQL query and runs it on the local node via sqlcmd"
-  [query]
-  (c/cd base-dir
-        (c/sudo username
-                (c/exec "bin/sqlcmd" (str "--query=" query)))))
 
 (defn connect
   "Opens a connection to the given node and returns a voltdb client."
@@ -169,15 +200,6 @@
   "Run an ad-hoc SQL stored procedure."
   [client & args]
   (apply call! client "@AdHoc" args))
-
-(defn install-stored-procedures!
-  "Uploads stored procedures jar and loads it into VoltDB"
-  [node]
-  (c/on node
-        (c/upload "procedures/jepsen-procedures.jar"
-                  (str base-dir "/jepsen-procedures.jar"))
-        (sql-cmd! "load classes jepsen-procedures.jar")
-        (sql-cmd! "CREATE PROCEDURE FROM CLASS jepsen.procedures.ReadAll")))
 
 (defn client
   "A single-register client."
