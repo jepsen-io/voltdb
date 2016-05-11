@@ -218,6 +218,11 @@
                              PRIMARY KEY (id)
                              );
                              PARTITION TABLE registers ON COLUMN id;")
+                   (sql-cmd! "CREATE PROCEDURE registers_cas
+                               PARTITION ON TABLE registers COLUMN id
+                             AS
+                               UPDATE registers SET value = ?
+                               WHERE id = ? AND value = ?;")
                    (info node "table created")))
            (client conn)))
 
@@ -238,9 +243,10 @@
                         (assoc op :type :ok))
              :cas   (let [[v v'] value
                           res (-> conn
-                                  (ad-hoc! "UPDATE registers SET value = ?
-                                           WHERE id = ? AND value = ?"
-                                           v' id v)
+                                  (call! "registers_cas" v' id v)
+;                                  (ad-hoc! "UPDATE registers SET value = ?
+;                                           WHERE id = ? AND value = ?"
+;                                           v' id v)
                                   first
                                   :rows
                                   first
