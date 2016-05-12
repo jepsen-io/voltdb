@@ -1,0 +1,47 @@
+https://voltdb.com/products/strongest-transactional-consistency-acid
+
+> ACID transactions in VoltDB offer guarantees that changes to a database
+> record are made, that data is correct, and that no data is lost.
+
+> VoltDB offers serializable isolation.
+
+> Where failures force a choice between consistency and availability, VoltDB
+> chooses consistency.
+
+https://voltdb.com/sites/default/files/tn-transactions.pdf
+
+> Because VoltDB always performs synchronous replication of read-write
+> transactions within a partition, end-users are guaranteed to read the results
+> of prior writes even when reads bypass the SPI sequencer.
+
+> Each of the described components - partitions, SPIs, and the MPI - can fail as
+> part of a node failure or network partition. Faults are detected and new
+> cluster topologies are established via a distributed agreement protocol. New
+> topology states are updated in an embedded version of ZooKeeper that runs as
+> part of each VoltDB cluster. The transaction management system uses standard
+> ZooKeeper leader election techniques to elect new SPIs and a new MPI to
+> replace any failed components.
+
+> Where failures force a choice between (CAP-wise) consistency and
+> availability, VoltDB chooses consistency.
+
+https://voltdb.com/blog/transaction-ordering-and-replication
+
+> every transaction released by the RPQ is safely replicated to all partitions
+> (and partition replicas) that are involved in the transaction.
+
+> Every node then broadcasts the set of failed nodes that it is aware of and
+> the last txn-id seen for each partition from each of the failed initiators
+> and the last committed multi-partition txn-id. If a node receives a failure
+> message containing a node failure that it has not observed then the node
+> restarts the failure handling process by rebroadcasting the failure messages
+> with the new larger failed node set. If a node receives a failure message
+> that does not contain the same set of failed nodes it is aware of then the
+> message is dropped because there is no agreement on the set of failed nodes.
+> The node that sent the incongruent set will eventually acknowledge the full
+> set of failures and rebroadcast with the correct set. Eventually the cluster
+> converges on a single set of failed nodes (because nodes stop failing or all
+> failures are acknowledged) with each surviving node having sent a failure
+> message to every other survivor.
+
+
