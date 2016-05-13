@@ -1,6 +1,7 @@
 .lein-repl-history
 case-studies
 roadmap.txt
+log/**
 pom.xml
 pom.xml.asc
 repl-port

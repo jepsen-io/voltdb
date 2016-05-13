@@ -34,7 +34,7 @@
     (cu/install-tarball! node url base-dir)
     (cu/ensure-user! username)
     (c/exec :chown :-R (str username ":" username) base-dir)
-    (info "RethinkDB unpacked")))
+    (info "VoltDB unpacked")))
 
 (defn deployment-xml
   "Generate a deployment.xml string for the given test."
@@ -49,20 +49,89 @@
 
 (defn configure!
   "Prepares config files and creates fresh DB."
-  [node test]
+  [test node]
   (c/sudo username
         (c/cd base-dir
               (c/exec :echo (deployment-xml test) :> "deployment.xml"))))
+
+(defn up?
+  "Is the given node ready to accept connections? Returns node, or nil."
+  [node]
+  (let [config (ClientConfig. "" "")]
+    (.setProcedureCallTimeout config 100)
+    (.setConnectionResponseTimeout config 100)
+
+    (with-open [c (ClientFactory/createClient config)]
+      (try
+        (.createConnection c (name node))
+        (.getInstanceId c)
+        node
+      (catch java.net.ConnectException e)))))
+
+(defn up-nodes
+  "What DB nodes are actually alive?"
+  [test]
+  (remove nil? (pmap up? (:nodes test))))
 
 (defn await-initialization
   "Blocks until the logfile reports 'Server completed initialization'."
   [node]
   (info "Waiting for" node "to initialize")
   (c/cd base-dir
-        (c/exec :tail :-f "stdout.log"
+        ; hack hack hack
+        (Thread/sleep 5000)
+        (c/exec :tail :-n 1 :-f "log/volt.log"
                 | :grep :-m 1 "completed initialization"
-                | :xargs (c/lit "echo \"\" >> stdout.log \\;")))
+                | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
   (info node "initialized"))
+
+(defn await-rejoin
+  "Blocks until the logfile reports 'Node rejoin completed'"
+  [node]
+  (info "Waiting for" node "to rejoin")
+  (c/cd base-dir
+        ; hack hack hack
+        (Thread/sleep 5000)
+        (c/exec :tail :-n 1 :-f "log/volt.log"
+                | :grep :-m 1 "Node rejoin completed"
+                | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
+  (info node "rejoined"))
+
+(defn start-daemon!
+  "Starts the daemon with the given command."
+  [test cmd host]
+  (c/sudo username
+    (cu/start-daemon! {:logfile (str base-dir "/stdout.log")
+                       :pidfile (str base-dir "/pidfile")
+                       :chdir   base-dir}
+                      (str base-dir "/bin/voltdb")
+                      cmd
+                      :--deployment (str base-dir "/deployment.xml")
+                      :--host host)))
+
+(defn start!
+  "Starts voltdb, creating a fresh DB"
+  [test node]
+  (start-daemon! test :create (jepsen/primary test))
+  (await-initialization node))
+
+(defn recover!
+  "Recovers a voltdb node"
+  [test node]
+  (start-daemon! test :recover (jepsen/primary test))
+  (await-initialization node))
+
+(defn rejoin!
+  "Rejoins a voltdb node"
+  [test node]
+  (start-daemon! test :rejoin (rand-nth (up-nodes test)))
+  (await-rejoin node))
+
+(defn stop!
+  "Stops voltdb"
+  [test node]
+  (c/su
+    (cu/stop-daemon! (str base-dir "/pidfile"))))
 
 (defn sql-cmd!
   "Takes an SQL query and runs it on the local node via sqlcmd"
@@ -93,35 +162,15 @@
             (str base-dir "/jepsen-procedures.jar"))
   (sql-cmd! "load classes jepsen-procedures.jar"))
 
-(defn start!
-  "Starts voltdb"
-  [node test]
-  (c/sudo username
-    (cu/start-daemon! {:logfile (str base-dir "/stdout.log")
-                       :pidfile (str base-dir "/pidfile")
-                       :chdir   base-dir}
-                      (str base-dir "/bin/voltdb")
-                      :create
-                      :--deployment (str base-dir "/deployment.xml")
-                      :--host (jepsen/primary test))
-    (Thread/sleep 5000)))
-
-(defn stop!
-  "Stops voltdb"
-  [node]
-  (c/su
-    (cu/stop-daemon! (str base-dir "/pidfile"))))
 
 (defn db
   "VoltDB around the given package tarball URL"
   [url]
   (reify db/DB
     (setup! [_ test node]
-      (doto node
-        (install! url)
-        (configure! test)
-        (start! test)
-        (await-initialization))
+      (install! node url)
+      (configure! test node)
+      (start! test node)
 
       ; Wait for convergence
       (jepsen/synchronize test)
@@ -132,7 +181,7 @@
         (install-stored-procedures!)))
 
     (teardown! [_ test node]
-      (stop! node)
+      (stop! test node)
       (c/su))
 ;        (c/exec :rm :-rf (c/lit (str base-dir "/*")))))
 
@@ -141,14 +190,17 @@
       [(str base-dir "/stdout.log")
        (str base-dir "/log/volt.log")])))
 
+
 (defn connect
   "Opens a connection to the given node and returns a voltdb client."
   [node]
   (-> (doto (ClientConfig. "" "")
-        (.setReconnectOnConnectionLoss true))
-        (ClientFactory/createClient)
-        (doto
-          (.createConnection (name node)))))
+        (.setReconnectOnConnectionLoss true)
+        (.setProcedureCallTimeout 1000)
+        (.setConnectionResponseTimeout 1000))
+      (ClientFactory/createClient)
+      (doto
+        (.createConnection (name node)))))
 
 (defn volt-table->map
   "Converts a VoltDB table to a data structure like
