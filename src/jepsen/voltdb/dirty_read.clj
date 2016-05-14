@@ -16,6 +16,7 @@
                     [independent  :as independent]
                     [nemesis      :as nemesis]
                     [net          :as net]
+                    [util         :as util]
                     [tests        :as tests]]
             [jepsen.os.debian     :as debian]
             [jepsen.voltdb        :as voltdb]
@@ -92,22 +93,24 @@
             reads (->> ok
                        (filter #(= :read (:f %)))
                        (map :value)
-                       (reduce conj #{}))
+                       (into (sorted-set)))
             strong-read-sets (->> ok
                                   (filter #(= :strong-read (:f %)))
                                   (map :value))
             strong-reads (reduce set/union strong-read-sets)
-            missing     (set/difference reads strong-reads)]
-        ; We expect at least one strong read
+            unseen       (set/difference strong-reads reads)
+            missing      (set/difference reads strong-reads)]
+        ; We expect one strong read per node
         (info :strong-read-sets (count strong-read-sets))
         (info :concurrency (:concurrency test))
-        (assert (pos? (count strong-read-sets)))
+        (assert (= (count strong-read-sets) (:concurrency test)))
         ; All strong reads had darn well better be equal
         (assert (apply = (map count (cons strong-reads strong-read-sets))))
 
         {:valid?            (empty? missing)
          :read-count        (count reads)
          :strong-read-count (count strong-reads)
+         :unseen-count      (count unseen)
          :missing-count     (count missing)
          :missing           missing}))))
 
@@ -174,6 +177,7 @@
          :concurrency 10
          :generator (gen/phases
                       (->> (rw-gen)
+                           (gen/stagger 1/100)
                            (gen/nemesis
                              (gen/seq (cycle [(gen/sleep 1)
                                               {:type :info :f :start}
