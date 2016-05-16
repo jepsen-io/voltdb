@@ -180,12 +180,11 @@
          :concurrency 15
          :generator (gen/phases
                       (->> (rw-gen)
-                           (gen/stagger 1/1000)
+                           (gen/delay 1/100)
                            (gen/nemesis
-                             (gen/seq (cycle [(gen/sleep 1)
-                                              {:type :info :f :start}
+                             (gen/seq (cycle [{:type :info :f :start}
                                               {:type :info :f :stop}])))
-                           (gen/time-limit 120))
+                           (gen/time-limit 300))
                       (gen/nemesis (gen/once {:type :info :f :stop}))
                       (gen/log "Rejoining all down nodes")
                       (gen/clients
