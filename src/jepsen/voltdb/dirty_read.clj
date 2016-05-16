@@ -75,7 +75,10 @@
                                (into (sorted-set))
                                (assoc op :type :ok, :value)))
            (catch org.voltdb.client.NoConnectionsException e
-             (assoc op :type :info, :error :no-conns))
+             ; It'll take a few seconds to come back, might as well take a
+             ; breather
+             (Thread/sleep 1000)
+             (assoc op :type :fail, :error :no-conns))
            (catch org.voltdb.client.ProcCallException e
              (assoc op :type :info, :error (.getMessage e)))))
 
@@ -174,15 +177,15 @@
                       (info "Network healed")
                       (voltdb/rejoin! test node)
                       :rejoined))
-         :concurrency 10
+         :concurrency 15
          :generator (gen/phases
                       (->> (rw-gen)
-                           (gen/stagger 1/100)
+                           (gen/stagger 1/1000)
                            (gen/nemesis
                              (gen/seq (cycle [(gen/sleep 1)
                                               {:type :info :f :start}
                                               {:type :info :f :stop}])))
-                           (gen/time-limit 60))
+                           (gen/time-limit 120))
                       (gen/nemesis (gen/once {:type :info :f :stop}))
                       (gen/log "Rejoining all down nodes")
                       (gen/clients

@@ -11,8 +11,9 @@
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
             [knossos.model        :as model]
-            [clojure.string       :as str]
             [clojure.data.xml     :as xml]
+            [clojure.string       :as str]
+            [clojure.java.io      :as io]
             [clojure.java.shell   :refer [sh]]
             [clojure.tools.logging :refer [info warn]])
   (:import (org.voltdb VoltTable
@@ -140,9 +141,22 @@
         (c/sudo username
                 (c/exec "bin/sqlcmd" (str "--query=" query)))))
 
+(defn snarf-procedure-deps!
+  "Downloads voltdb.jar from the current node to procedures/, so we can compile
+  stored procedures."
+  []
+  (let [dir  (str base-dir "/voltdb/")
+        f    (first (c/cd dir (cu/ls (c/lit "voltdb-*.jar"))))
+        src  (str dir f)
+        dest (io/file (str "procedures/" f))]
+    (when-not (.exists dest)
+      (info "Downloading" f "to" (.getCanonicalPath dest))
+      (c/download src (.getCanonicalPath dest)))))
+
 (defn build-stored-procedures!
   "Compiles and packages stored procedures in procedures/"
   []
+  (sh "mkdir" "obj" :dir "procedures/")
   (let [r (sh "bash" "-c" "javac -classpath \"./:./*\" -d ./obj *.java"
               :dir "procedures/")]
     (when-not (zero? (:exit r))
@@ -154,31 +168,43 @@
       (throw (RuntimeException. (str "STDOUT:\n" (:out r)
                                      "\n\nSTDERR:\n" (:err r)))))))
 
-
-(defn install-stored-procedures!
-  "Uploads stored procedures jar and loads it into VoltDB"
-  []
-  (c/upload "procedures/jepsen-procedures.jar"
+(defn upload-stored-procedures!
+  "Uploads stored procedures jar."
+  [node]
+  (c/upload (.getCanonicalPath (io/file "procedures/jepsen-procedures.jar"))
             (str base-dir "/jepsen-procedures.jar"))
-  (sql-cmd! "load classes jepsen-procedures.jar"))
+  (info node "stored procedures uploaded"))
 
+(defn load-stored-procedures!
+  "Load stored procedures into voltdb."
+  [node]
+  (sql-cmd! "load classes jepsen-procedures.jar")
+  (info node "stored procedures loaded"))
 
 (defn db
   "VoltDB around the given package tarball URL"
   [url]
   (reify db/DB
     (setup! [_ test node]
+      ; Download and unpack
       (install! node url)
-      (configure! test node)
-      (start! test node)
 
-      ; Wait for convergence
-      (jepsen/synchronize test)
+      ; Prepare stored procedures in parallel
+      (let [procedures (future (when (= node (jepsen/primary test))
+                                 (snarf-procedure-deps!)
+                                 (build-stored-procedures!)
+                                 (upload-stored-procedures! node)))]
+        ; Boot
+        (configure! test node)
+        (start! test node)
 
-      ; Stored procedures
-      (when (= node (jepsen/primary test))
-        (build-stored-procedures!)
-        (install-stored-procedures!)))
+        ; Wait for convergence
+        (jepsen/synchronize test)
+
+        ; Finish procedures
+        @procedures
+        (when (= node (jepsen/primary test))
+          (load-stored-procedures! node))))
 
     (teardown! [_ test node]
       (stop! test node)
