@@ -83,8 +83,7 @@
              (assoc op :type :info, :error (.getMessage e)))))
 
        (teardown! [_ test]
-         (info "Closing conn" conn)
-         (.close conn))))))
+         (voltdb/close! conn))))))
 
 (defn checker
   "Verifies that we never read an element from a transaction which did not

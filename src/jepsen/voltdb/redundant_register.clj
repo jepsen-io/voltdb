@@ -53,7 +53,7 @@
                         (assoc op :type :ok)))))
 
       (teardown! [_ test]
-        (.close conn)))))
+        (voltdb/close! conn)))))
 
 
 (defn r   [_ _] {:type :invoke, :f :read, :value nil})

@@ -19,59 +19,75 @@
 
 (defn client
   "A single-register client."
-  ([] (client nil))
-  ([conn]
+  ([opts] (client nil opts))
+  ([conn opts]
    (let [initialized? (promise)]
      (reify client/Client
        (setup! [_ test node]
-         (let [conn (voltdb/connect node)]
-           (c/on node
-                 (when (deliver initialized? true)
-                   ; Create table
-                   (voltdb/sql-cmd! "CREATE TABLE registers (
+         (info node "setting up")
+         (let [conn (voltdb/connect node {:procedure-call-timeout 60000})]
+           (info node "connected")
+           (when (deliver initialized? true)
+             (try
+               (c/on node
+                     ; Create table
+                     (voltdb/sql-cmd! "CREATE TABLE registers (
                                       id          INTEGER UNIQUE NOT NULL,
                                       value       INTEGER NOT NULL,
                                       PRIMARY KEY (id)
-                                    );
-                                    PARTITION TABLE registers ON COLUMN id;")
-                   (voltdb/sql-cmd! "CREATE PROCEDURE registers_cas
+                                      );
+                                      PARTITION TABLE registers ON COLUMN id;")
+                     (voltdb/sql-cmd! "CREATE PROCEDURE registers_cas
                                       PARTITION ON TABLE registers COLUMN id
-                                    AS
+                                      AS
                                       UPDATE registers SET value = ?
                                       WHERE id = ? AND value = ?;")
-                   (info node "table created")))
-           (client conn)))
+                     (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
+                                      jepsen.procedures.SRegisterStrongRead;")
+                     (info node "table created"))
+               (catch RuntimeException e
+                 (voltdb/close! conn)
+                 (throw e))))
+           (info node "setup complete")
+           (client conn opts)))
 
        (invoke! [this test op]
-         (let [id     (key (:value op))
-               value  (val (:value op))]
-           (case (:f op)
-             :read   (let [v (-> conn
-                                 (voltdb/call! "REGISTERS.select" id)
-                                 first
-                                 :rows
-                                 first
-                                 :VALUE)]
-                           (assoc op
-                                  :type :ok
-                                  :value (independent/tuple id v)))
-             :write (do (voltdb/call! conn "REGISTERS.upsert" id value)
-                        (assoc op :type :ok))
-             :cas   (let [[v v'] value
-                          res (-> conn
-                                  (voltdb/call! "registers_cas" v' id v)
-;                                  (ad-hoc! "UPDATE registers SET value = ?
-;                                           WHERE id = ? AND value = ?"
-;                                           v' id v)
-                                  first
-                                  :rows
-                                  first
-                                  :modified_tuples)]
-                      (assert (#{0 1} res))
-                      (assoc op :type (if (zero? res) :fail :ok))))))
+         (try
+           (let [id     (key (:value op))
+                 value  (val (:value op))]
+             (case (:f op)
+               :read   (let [proc (if (:strong-read? opts)
+                                    "SRegisterStrongRead"
+                                    "REGISTERS.select")
+                             v (-> conn
+                                   (voltdb/call! proc id)
+                                   first
+                                   :rows
+                                   first
+                                   :VALUE)]
+                         (assoc op
+                                :type :ok
+                                :value (independent/tuple id v)))
+               :write (do (voltdb/call! conn "REGISTERS.upsert" id value)
+                          (assoc op :type :ok))
+               :cas   (let [[v v'] value
+                            res (-> conn
+                                    (voltdb/call! "registers_cas" v' id v)
+                                    first
+                                    :rows
+                                    first
+                                    :modified_tuples)]
+                        (assert (#{0 1} res))
+                        (assoc op :type (if (zero? res) :fail :ok)))))
+           (catch org.voltdb.client.ProcCallException e
+             (let [type (if (= :read (:f op)) :fail :info)]
+               (if (re-find #"^No response received in the allotted time"
+                            (.getMessage e))
+                 (assoc op :type type, :error :timeout)
+                 (throw e))))))
 
        (teardown! [_ test]
-         (.close conn))))))
+         (voltdb/close! conn))))))
 
 (defn r   [_ _] {:type :invoke, :f :read, :value nil})
 (defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})
@@ -83,9 +99,9 @@
   (assoc tests/noop-test
          :name    "voltdb"
          :os      debian/os
-         :client  (client)
+         :client  (client {:strong-reads? false})
          :db      (voltdb/db url)
-         :model   (model/cas-register 0)
+         :model   (model/cas-register nil)
          :checker (checker/compose
                     {:linear (independent/checker checker/linearizable)
                      :perf   (checker/perf)})
@@ -100,8 +116,8 @@
                                   (gen/delay 1)
                                   (gen/time-limit 30))))
                          (gen/nemesis
-                           (gen/seq (cycle [(gen/sleep 30)
+                           (gen/seq (cycle [(gen/sleep 25)
                                             {:type :info :f :start}
-                                            (gen/sleep 30)
+                                            (gen/sleep 25)
                                             {:type :info :f :stop}])))
-                         (gen/time-limit 40))))
+                         (gen/time-limit 60))))

@@ -17,6 +17,7 @@
             [clojure.java.shell   :refer [sh]]
             [clojure.tools.logging :refer [info warn]])
   (:import (org.voltdb VoltTable
+                       VoltType
                        VoltTableRow)
            (org.voltdb.client Client
                               ClientConfig
@@ -218,15 +219,28 @@
 
 
 (defn connect
-  "Opens a connection to the given node and returns a voltdb client."
-  [node]
-  (-> (doto (ClientConfig. "" "")
-        (.setReconnectOnConnectionLoss true)
-        (.setProcedureCallTimeout 1000)
-        (.setConnectionResponseTimeout 1000))
-      (ClientFactory/createClient)
-      (doto
-        (.createConnection (name node)))))
+  "Opens a connection to the given node and returns a voltdb client. Options:
+
+      :procedure-call-timeout
+      :connection-response-timeout"
+  ([node]
+   (connect node {}))
+  ([node opts]
+   (let [opts (merge {:procedure-call-timeout 1000
+                      :connection-response-timeout 1000}
+                     opts)]
+     (-> (doto (ClientConfig. "" "")
+           (.setReconnectOnConnectionLoss true)
+           (.setProcedureCallTimeout (:procedure-call-timeout opts))
+           (.setConnectionResponseTimeout (:connection-response-timeout opts)))
+         (ClientFactory/createClient)
+         (doto
+           (.createConnection (name node)))))))
+
+(defn close!
+  "Calls c.close"
+  [^Client c]
+  (.close c))
 
 (defn volt-table->map
   "Converts a VoltDB table to a data structure like
@@ -258,7 +272,7 @@
              (let [cols (object-array column-count)]
                (loop [j 0]
                  (when (< j column-count)
-                   (aset cols j (.get row j (nth column-types j)))
+                   (aset cols j (.get row j ^VoltType (nth column-types j)))
                    (recur (inc j))))
                (recur (conj! rows (clojure.lang.PersistentStructMap/construct
                                     basis
@@ -268,7 +282,7 @@
 
 (defn call!
   "Call a stored procedure and returns a seq of VoltTable results."
-  [client procedure & args]
+  [^Client client procedure & args]
   (let [res (.callProcedure client procedure (into-array Object args))]
     ; Docs claim callProcedure will throw, but tutorial checks anyway so ???
     (assert (= (.getStatus res) ClientResponse/SUCCESS))
