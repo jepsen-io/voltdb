@@ -47,7 +47,8 @@
        [:cluster {:hostcount (count (:nodes test))
                   :kfactor (:k-factor test (dec (count (:nodes test))))}]
        [:paths {}
-        [:voltdbroot {:path base-dir}]]])))
+        [:voltdbroot {:path base-dir}]]
+       [:heartbeat {:timeout 1}]])))
 
 (defn configure!
   "Prepares config files and creates fresh DB."

@@ -10,6 +10,7 @@
                     [nemesis      :as nemesis]
                     [tests        :as tests]]
             [jepsen.os.debian     :as debian]
+            [jepsen.checker.timeline :as timeline]
             [jepsen.voltdb        :as voltdb]
             [knossos.model        :as model]
             [knossos.op           :as op]
@@ -18,15 +19,20 @@
             [clojure.tools.logging :refer [info warn]]))
 
 (defn client
-  "A single-register client."
+  "A single-register client. Options:
+
+      :strong-read?                 Whether to perform normal or strong selects
+      :procedure-call-timeout       How long in ms to wait for proc calls
+      :connection-response-timeout  How long in ms to wait for connections"
   ([opts] (client nil opts))
   ([conn opts]
    (let [initialized? (promise)]
      (reify client/Client
        (setup! [_ test node]
-         (info node "setting up")
-         (let [conn (voltdb/connect node {:procedure-call-timeout 60000})]
-           (info node "connected")
+         (let [conn (voltdb/connect
+                      node (select-keys opts
+                                        [:procedure-call-timeout
+                                         :connection-response-timeout]))]
            (when (deliver initialized? true)
              (try
                (c/on node
@@ -48,7 +54,6 @@
                (catch RuntimeException e
                  (voltdb/close! conn)
                  (throw e))))
-           (info node "setup complete")
            (client conn opts)))
 
        (invoke! [this test op]
@@ -79,11 +84,17 @@
                                     :modified_tuples)]
                         (assert (#{0 1} res))
                         (assoc op :type (if (zero? res) :fail :ok)))))
+           (catch org.voltdb.client.NoConnectionsException e
+             (assoc op :type :fail, :error :no-conns))
            (catch org.voltdb.client.ProcCallException e
              (let [type (if (= :read (:f op)) :fail :info)]
-               (if (re-find #"^No response received in the allotted time"
-                            (.getMessage e))
+               (condp re-find (.getMessage e)
+                 #"^No response received in the allotted time"
                  (assoc op :type type, :error :timeout)
+
+                 #"^Connection to database host .+ was lost before a response"
+                 (assoc op :type type, :error :conn-lost)
+
                  (throw e))))))
 
        (teardown! [_ test]
@@ -94,30 +105,40 @@
 (defn cas [_ _] {:type :invoke, :f :cas, :value [(rand-int 5) (rand-int 5)]})
 
 (defn single-register-test
-  "Takes a tarball URL"
-  [url]
-  (assoc tests/noop-test
-         :name    "voltdb"
-         :os      debian/os
-         :client  (client {:strong-reads? false})
-         :db      (voltdb/db url)
-         :model   (model/cas-register nil)
-         :checker (checker/compose
-                    {:linear (independent/checker checker/linearizable)
-                     :perf   (checker/perf)})
-         :nemesis (nemesis/partition-random-halves)
-         :concurrency 100
-         :generator (->> (independent/concurrent-generator
-                           10
-                           (range)
-                           (fn [id]
-                             (->> (gen/mix [w cas])
-                                  (gen/reserve 5 r)
-                                  (gen/delay 1)
-                                  (gen/time-limit 30))))
-                         (gen/nemesis
-                           (gen/seq (cycle [(gen/sleep 25)
-                                            {:type :info :f :start}
-                                            (gen/sleep 25)
-                                            {:type :info :f :stop}])))
-                         (gen/time-limit 60))))
+  "Options:
+
+      :time-limit                   How long should we run the test for?
+      :tarball                      URL to an enterprise voltdb tarball.
+      :strong-read?                 Whether to perform normal or strong selects
+      :procedure-call-timeout       How long in ms to wait for proc calls
+      :connection-response-timeout  How long in ms to wait for connections"
+  [opts]
+  (merge tests/noop-test
+         opts
+         {:name    "voltdb"
+          :os      debian/os
+          :client  (client (select-keys opts [:strong-read?
+                                              :procedure-call-timeout
+                                              :connection-response-timeout]))
+          :db      (voltdb/db (:tarball opts))
+          :model   (model/cas-register nil)
+          :checker (checker/compose
+                     {:linear (independent/checker checker/linearizable)
+                      :timeline (independent/checker (timeline/html))
+                      :perf   (checker/perf)})
+          :nemesis (nemesis/partition-random-halves)
+          :concurrency 100
+          :generator (->> (independent/concurrent-generator
+                            10
+                            (range)
+                            (fn [id]
+                              (->> (gen/mix [w cas])
+                                   (gen/reserve 5 r)
+                                   (gen/delay 1)
+                                   (gen/time-limit 30))))
+                          (gen/nemesis
+                            (gen/seq (cycle [(gen/sleep 25)
+                                             {:type :info :f :start}
+                                             (gen/sleep 25)
+                                             {:type :info :f :stop}])))
+                          (gen/time-limit (:time-limit opts)))}))
