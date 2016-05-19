@@ -87,11 +87,17 @@
 
 (defn checker
   "Verifies that we never read an element from a transaction which did not
-  commmit (and hence was not visible in a final strong read)"
+  commmit (and hence was not visible in a final strong read).
+
+  Also verifies that every successful write is present in the strong read set."
   []
   (reify checker/Checker
     (check [checker test model history opts]
       (let [ok    (filter op/ok? history)
+            writes (->> ok
+                        (filter #(= :write (:f %)))
+                        (map :value)
+                        (into (sorted-set)))
             reads (->> ok
                        (filter #(= :read (:f %)))
                        (map :value)
@@ -101,7 +107,8 @@
                                   (map :value))
             strong-reads (reduce set/union strong-read-sets)
             unseen       (set/difference strong-reads reads)
-            missing      (set/difference reads strong-reads)]
+            missing      (set/difference reads strong-reads)
+            lost         (set/difference writes strong-reads)]
         ; We expect one strong read per node
         (info :strong-read-sets (count strong-read-sets))
         (info :concurrency (:concurrency test))
@@ -109,12 +116,14 @@
         ; All strong reads had darn well better be equal
         (assert (apply = (map count (cons strong-reads strong-read-sets))))
 
-        {:valid?            (empty? missing)
+        {:valid?            (and (empty? missing) (empty? lost))
          :read-count        (count reads)
          :strong-read-count (count strong-reads)
          :unseen-count      (count unseen)
          :missing-count     (count missing)
-         :missing           missing}))))
+         :missing           missing
+         :lost-count        (count lost)
+         :lost              lost}))))
 
 (defn sr  [_ _] {:type :invoke, :f :strong-read, :value nil})
 

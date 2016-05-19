@@ -48,7 +48,9 @@
                   :kfactor (:k-factor test (dec (count (:nodes test))))}]
        [:paths {}
         [:voltdbroot {:path base-dir}]]
-       [:heartbeat {:timeout 1}]])))
+       [:heartbeat {:timeout 5}] ; seconds
+       [:commandlog {:enabled true, :synchronous true}
+        [:frequency {:time 2}]]]))) ; milliseconds
 
 (defn configure!
   "Prepares config files and creates fresh DB."
@@ -133,10 +135,12 @@
    (await-initialization node)))
 
 (defn rejoin!
-  "Rejoins a voltdb node"
+  "Rejoins a voltdb node. Serialized to work around a bug in voltdb where
+  multiple rejoins can take down cluster nodes."
   [test node]
-  (start-daemon! test :rejoin (rand-nth (up-nodes test)))
-  (await-rejoin node))
+  (locking rejoin!
+    (start-daemon! test :rejoin (rand-nth (up-nodes test)))
+    (await-rejoin node)))
 
 (defn stop!
   "Stops voltdb"
