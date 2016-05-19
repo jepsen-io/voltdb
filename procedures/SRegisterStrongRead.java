@@ -9,7 +9,7 @@ public class SRegisterStrongRead extends VoltProcedure {
 
   public final SQLStmt read = new SQLStmt("SELECT * FROM registers WHERE id = ?;");
 
-  public VoltTable[] run(long id) throws VoltAbortException {
+  public VoltTable[] run(int id) throws VoltAbortException {
     voltQueueSQL(read, id);
     return voltExecuteSQL();
   }

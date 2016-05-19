@@ -57,6 +57,11 @@
         (c/cd base-dir
               (c/exec :echo (deployment-xml test) :> "deployment.xml"))))
 
+(defn close!
+  "Calls c.close"
+  [^Client c]
+  (.close c))
+
 (defn up?
   "Is the given node ready to accept connections? Returns node, or nil."
   [node]
@@ -64,12 +69,13 @@
     (.setProcedureCallTimeout config 100)
     (.setConnectionResponseTimeout config 100)
 
-    (with-open [c (ClientFactory/createClient config)]
+    (let [c (ClientFactory/createClient config)]
       (try
         (.createConnection c (name node))
         (.getInstanceId c)
         node
-      (catch java.net.ConnectException e)))))
+      (catch java.net.ConnectException e)
+      (finally (close! c))))))
 
 (defn up-nodes
   "What DB nodes are actually alive?"
@@ -119,10 +125,12 @@
   (await-initialization node))
 
 (defn recover!
-  "Recovers a voltdb node"
-  [test node]
-  (start-daemon! test :recover (jepsen/primary test))
-  (await-initialization node))
+  "Recovers an entire cluster, or with a node, a single node."
+  ([test]
+   (jepsen.core/on-nodes test recover!))
+  ([test node]
+   (start-daemon! test :recover (jepsen/primary test))
+   (await-initialization node)))
 
 (defn rejoin!
   "Rejoins a voltdb node"
@@ -237,11 +245,6 @@
          (ClientFactory/createClient)
          (doto
            (.createConnection (name node)))))))
-
-(defn close!
-  "Calls c.close"
-  [^Client c]
-  (.close c))
 
 (defn volt-table->map
   "Converts a VoltDB table to a data structure like

@@ -21,7 +21,7 @@
 (defn client
   "A single-register client. Options:
 
-      :strong-read?                 Whether to perform normal or strong selects
+      :strong-reads?                 Whether to perform normal or strong selects
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   ([opts] (client nil opts))
@@ -50,6 +50,8 @@
                                       WHERE id = ? AND value = ?;")
                      (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
                                       jepsen.procedures.SRegisterStrongRead;")
+                     (voltdb/sql-cmd! "PARTITION PROCEDURE SRegisterStrongRead
+                                      ON TABLE registers COLUMN id;")
                      (info node "table created"))
                (catch RuntimeException e
                  (voltdb/close! conn)
@@ -61,7 +63,7 @@
            (let [id     (key (:value op))
                  value  (val (:value op))]
              (case (:f op)
-               :read   (let [proc (if (:strong-read? opts)
+               :read   (let [proc (if (:strong-reads? opts)
                                     "SRegisterStrongRead"
                                     "REGISTERS.select")
                              v (-> conn
@@ -95,6 +97,9 @@
                  #"^Connection to database host .+ was lost before a response"
                  (assoc op :type type, :error :conn-lost)
 
+                 #"^Transaction dropped due to change in mastership"
+                 (assoc op :type type, :error :mastership-change)
+
                  (throw e))))))
 
        (teardown! [_ test]
@@ -109,7 +114,8 @@
 
       :time-limit                   How long should we run the test for?
       :tarball                      URL to an enterprise voltdb tarball.
-      :strong-read?                 Whether to perform normal or strong selects
+      :strong-reads?                Whether to perform normal or strong selects
+      :no-reads?                    Don't bother with reads at all
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
@@ -117,7 +123,7 @@
          opts
          {:name    "voltdb"
           :os      debian/os
-          :client  (client (select-keys opts [:strong-read?
+          :client  (client (select-keys opts [:strong-reads?
                                               :procedure-call-timeout
                                               :connection-response-timeout]))
           :db      (voltdb/db (:tarball opts))
@@ -133,7 +139,9 @@
                             (range)
                             (fn [id]
                               (->> (gen/mix [w cas])
-                                   (gen/reserve 5 r)
+                                   (gen/reserve 5 (if (:no-reads? opts)
+                                                    cas
+                                                    r))
                                    (gen/delay 1)
                                    (gen/time-limit 30))))
                           (gen/nemesis
