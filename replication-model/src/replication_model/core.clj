@@ -137,7 +137,11 @@
       (assoc state
              :next-op (inc op)
              :nodes   (assoc (:nodes state) id leader')
-             :net     (broadcast (:net state) id recipients [:apply op])))))
+             :net     (broadcast (:net state) id recipients [:apply op])
+             :history (conj (:history state) {:step          :start-op
+                                              :node          id
+                                              :op            op
+                                              :broadcast-to  recipients})))))
 
 (defn step-recv-msg
   "Processes a random message, or returns nil if no messages pending."
@@ -148,13 +152,21 @@
       :apply (let [op (second msg)]
                (-> s
                    (update-in [:nodes b :applied] conj op)
-                   (assoc :net (send-msg net' b a [:ack op]))))
+                   (assoc :net (send-msg net' b a [:ack op]))
+                   (update :history conj {:step :apply
+                                          :node b
+                                          :from a
+                                          :op   op})))
 
       ; Handle an acknowledgement by removing it from the op's wait set.
       :ack (let [op (second msg)]
              (-> s
                  (update-in [:nodes b :waiting op] disj a)
-                 (assoc :net net'))))))
+                 (assoc :net net')
+                 (update :history conj {:step :ack
+                                        :node b
+                                        :from a
+                                        :op   op}))))))
 
 (defn step-return-op
   "A node with an empty waiting set for a given write can return a write to the
@@ -169,14 +181,19 @@
                               (-> s
                                   (update :returned conj op)
                                   (update-in [:nodes (:id node) :waiting]
-                                             dissoc op)))))
+                                             dissoc op)
+                                  (update :history conj {:step :return-op
+                                                         :node node
+                                                         :op   op})))))
                     first)))
        first))
 
 (defn step-conn-lost
   "A network connection could drop, discarding all messages in flight."
   [s]
-  (update s :net drop-conn))
+  (-> s
+      (update :net drop-conn)
+      (update :history conj {:step :conn-lost})))
 
 (defn step-resolve-fault
   "Take a node which believes itself to be a part of its cluster. Declare
@@ -189,25 +206,36 @@
                        (filter #(contains? (:cluster %) (:id %)))
                        seq
                        rand-nth)]
-    (when-let [candidates (seq (disj (:cluster node) (:id node)))]
-      (let [dead    (rand-nth candidates)
-            c'      (disj (:cluster node) dead)
-            leader' (or (->> c'
-                             (map (:nodes s))
-                             (filter :leader?)
-                             first)
-                        (->> c' seq rand-nth))]
-        (assoc s :nodes (->> (:nodes s)
-                             (map (fn [[id n]]
-                                    (if-not (c' id)
-                                      ; Not part of the new cluster; leave it
-                                      [id n]
-                                      ; Part of the new cluster; update
-                                      (let [n (if (= id leader')
-                                                (assoc n :leader? true)
-                                                n)]
-                                        [id (assoc n :cluster c')]))))
-                             (into {})))))))
+    (let [c (:cluster node)]
+      (when-let [candidates (seq (disj c (:id node)))]
+        (let [dead    (rand-nth candidates)
+              c'      (disj c dead)
+              leaders (->> c
+                           (map (:nodes s))
+                           (filter :leader?)
+                           (map :id)
+                           set)
+              leader' (or (some c' leaders)
+                          (->> c' seq rand-nth))]
+          (-> s
+              (assoc :nodes (->> (:nodes s)
+                                 (map (fn [[id n]]
+                                        (if-not (c' id)
+                                          ; Not part of the new cluster; skip
+                                          [id n]
+                                          ; Part of the new cluster; update
+                                          (let [n (if (= id leader')
+                                                    (assoc n :leader? true)
+                                                    n)]
+                                            [id (assoc n :cluster c')]))))
+                                 (into {})))
+              (update :history conj {:step      :resolve-fault
+                                     :node      (:id node)
+                                     :dead      dead
+                                     :cluster   c
+                                     :cluster'  c'
+                                     :leaders   leaders
+                                     :leader'   leader'})))))))
 
 (defn step
   "Generalized state transition"

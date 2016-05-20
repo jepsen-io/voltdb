@@ -53,10 +53,11 @@
 (deftest txn-test
 ;  (dorun (map pprint (take 100 (iterate step (state 3)))))
 
-  (let [v (violations (state 3) 100000 100)
+  (let [v (violations (state 3) 10000 100)
         vb (boolean v)]
     (or (is (not vb))
-        (do (println "Found violation in" (count (:states v)) "transitions:")
+        (do (println "Found violation in" (dec (count (:states v)))
+                     "transitions:")
             (doseq [s (:states v)]
               (prn)
               (pprint s))
