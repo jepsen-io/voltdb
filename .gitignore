@@ -16,3 +16,5 @@ build
 target/**
 checkouts/**
 store/**
+writeup/notes
+research
