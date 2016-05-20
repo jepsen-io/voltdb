@@ -80,12 +80,13 @@
 (defn node
   "A fresh node with the given id"
   [nodes id]
-  {:id      id
-   :alive?  true
-   :leader? false
-   :cluster (set nodes)
-   :applied (sorted-set)
-   :waiting {}})
+  {:id      id            ; Our node id
+   :alive?  true          ; Is this node alive
+   :leader? false         ; Is this node a leader
+   :cluster (set nodes)   ; Set of cluster node ids
+   :applied (sorted-set)  ; Set of applied writes
+   :waiting {}            ; Map of op ids to sets of nodes waiting
+   :returns {}})          ; Map of op ids to planned return values
 
 (defn state
   "A fresh state with n nodes"
@@ -95,7 +96,7 @@
      :nodes     (-> (zipmap node-ids (map (partial node node-ids)node-ids))
                     (assoc-in [0 :leader?] true))
      :net       (net node-ids)
-     :returned  (sorted-set)
+     :written   (sorted-set)
      :history   []}))
 
 (defn rand-node-id
@@ -105,93 +106,180 @@
 
 ;; Invariants
 
-(defn lost-writes
-  "Lost writes are those which have been returned but are not present on a
-  leader."
+(defn stale-reads
+  "Stale reads are possible when a returned op is not present on a leader."
   [state]
-  (let [returned (:returned state)]
+  (let [written (:written state)]
     (->> state
          :nodes
          vals
          (filter :leader?)
          (keep (fn [node]
-                 (let [lost (set/difference returned (:applied node))]
+                 (let [lost (set/difference written (:applied node))]
                    (when-not (empty? lost)
                      {:node (:id node)
-                      :lost lost}))))
+                      :stale lost}))))
          seq)))
+
+(defn lost-writes
+  "We detect lost writes by the presence of a :lost key in the state."
+  [state]
+  (when-let [lost (:lost state)]
+    {:lost-writes lost}))
+
+(defn returns-waiting
+  "Ensures waiting and return maps are in sync."
+  [state]
+  (when-not (->> state
+                 :nodes
+                 vals
+                 (every? (fn [node]
+                           (= (set (keys (:waiting node)))
+                              (set (keys (:returns node)))))))
+      {:returns-waiting :not-equal}))
+
+(defn invariant
+  "All invariants of interest."
+  [state]
+  (or (lost-writes state)
+      (returns-waiting state)))
+
+;; Operations
+
+(defn op
+  "Generates a new op for a state. Returns [op-type value].
+
+  There are two types of operations.
+
+  :write  A write operation adds the given value to the :applied set of each
+          node, and returns to the :written set.
+  :check  A check operation checks to see if any of the given values are
+          missing, makes no changes to the node's state, and returns to the
+          :lost set, if any ops were not found."
+  [s]
+  (if (< (rand) 0.5)
+    [:write (:next-op s)]
+    [:check (:written s)]))
+
+(defn apply-op
+  "Applies an op to a node and returns [node', ok?, return-val]"
+  [node [type value]]
+  (case type
+    :write [(update node :applied conj value) value]
+    :check [node (set/difference value (:applied node))]))
 
 ;; State transitions
 
 (defn step-start-op
-  "Picks a live leader, applies an op to that node locally, and broadcasts an
-  [:apply op] message to all nodes in the leader's cluster."
+  "Picks a live leader, applies an op to that node locally, records an intended
+  return value, and broadcasts an op message to all nodes in the leader's
+  cluster."
   [state]
   (when-let [id (->> state :nodes vals
                      (filter :leader?)
                      (filter :alive?)
                      seq rand-nth :id)]
-    (let [op         (:next-op state)
-          leader     (get (:nodes state) id)
-          recipients (-> (:cluster leader)
-                         (disj id))
-          leader' (-> leader
-                      (update :applied conj op)
-                      (assoc-in [:waiting op] recipients))]
+    (let [op-id               (:next-op state)
+          [type value :as op] (op state)
+          leader              (get (:nodes state) id)
+          recipients          (-> (:cluster leader)
+                                  (disj id))
+          [leader' retval]    (apply-op leader op)
+          leader'             (-> leader'
+                                  (assoc-in [:waiting op-id] recipients)
+                                  (assoc-in [:returns op-id] [type retval]))]
       (assoc state
-             :next-op (inc op)
+             :next-op (inc op-id)
              :nodes   (assoc (:nodes state) id leader')
-             :net     (broadcast (:net state) id recipients [:apply op])
+             :net     (broadcast (:net state) id recipients [:apply op-id op])
              :history (conj (:history state) {:step          :start-op
                                               :node          id
+                                              :op-id         op-id
                                               :op            op
                                               :broadcast-to  recipients})))))
 
 (defn step-recv-msg
   "Processes a random message on an alive node, or returns nil if no messages
-  pending."
+  pending. Emits a response to the sender. Nodes reject message from outside
+  their cluster."
   [s]
   (when-let [[net' a b msg] (recv-msg (:net s))]
-    (when (-> s :nodes (get b) :alive?)
-      (condp = (first msg)
-        ; Apply message locally and acknowledge
-        :apply (let [op (second msg)]
-                 (-> s
-                     (update-in [:nodes b :applied] conj op)
-                     (assoc :net (send-msg net' b a [:ack op]))
-                     (update :history conj {:step :apply
-                                            :node b
-                                            :from a
-                                            :op   op})))
+    (let [node (get (:nodes s) b)]
+      (when (and (:alive? node) ((:cluster node) a))
+        (condp = (first msg)
+          ; Apply message locally and acknowledge
+          :apply (let [[_ op-id [type value :as op]] msg
+                       [node' res] (apply-op node op)
+                       response-msg [:ack op-id res]]
+                   (-> s
+                       (assoc-in [:nodes b] node')
+                       (assoc :net (send-msg net' b a response-msg))
+                       (update :history conj {:step  :apply
+                                              :node  b
+                                              :from  a
+                                              :op-id op-id
+                                              :op    op})))
 
         ; Handle an acknowledgement by removing it from the op's wait set.
-        :ack (let [op (second msg)]
-               (-> s
-                   (update-in [:nodes b :waiting op] disj a)
+        ; If it's already been removed, noop.
+        :ack (let [[_ op-id res] msg
+                   waiting (get (:waiting node) op-id)
+                   s' (if waiting
+                        (update-in s [:nodes b :waiting op-id] disj a)
+                        s)]
+               (-> s'
                    (assoc :net net')
-                   (update :history conj {:step :ack
-                                          :node b
-                                          :from a
-                                          :op   op})))))))
+                   (update :history conj {:step  :ack
+                                          :node  b
+                                          :from  a
+                                          :op-id op-id
+                                          :noop? (not waiting)})))
+
+        ; Handle a negative acknowledgement by canceling the operation
+        ; entirely, removing it from pending and returns.
+        :nack (let [[_ op-id] msg]
+                (-> s
+                    (update-in [:nodes b :waiting] dissoc op-id)
+                    (update-in [:nodes b :returns] dissoc op-id)
+                    (assoc :net net')
+                    (update :history conj {:step :nack
+                                           :node b
+                                           :from a
+                                           :op-id op-id}))))))))
+
+(defn return-op
+  "Takes a state, a node, and an op id to return. Clears the op id from the
+  node's waiting and returns state, and returns a value to the client (global
+  state).
+
+    :write ops are added to the state's :written set
+    :check sets, if nonempty, are added to the state's :lost set"
+  [s node op-id]
+  (let [[type value :as return] (get (:returns node) op-id)]
+    (-> (case type
+          :write (update s :written conj value)
+          :check (if (empty? value)
+                   s
+                   (update s :lost set/union value)))
+        (update-in [:nodes (:id node) :waiting] dissoc op-id)
+        (update-in [:nodes (:id node) :returns] dissoc op-id)
+        (update :history conj {:step   :return-op
+                               :node   (:id node)
+                               :op-id  op-id
+                               :return return}))))
 
 (defn step-return-op
-  "An alive node with an empty waiting set for a given write can return a write
-  to the client."
+  "An alive node with an empty waiting set for a given op can use its :returns
+  map to return a value to the client (global state)."
   [s]
   (->> (shuffle (vals (:nodes s)))
        (filter :alive?)
        (keep (fn [node]
+;               (prn :considering node)
                (->> (shuffle (vec (:waiting node)))
-                    (keep (fn [[op waiting-on]]
+                    (keep (fn [[op-id waiting-on]]
                             (when (empty? waiting-on)
-                              ; We can return this.
-                              (-> s
-                                  (update :returned conj op)
-                                  (update-in [:nodes (:id node) :waiting]
-                                             dissoc op)
-                                  (update :history conj {:step :return-op
-                                                         :node (:id node)
-                                                         :op   op})))))
+                              (return-op s node op-id))))
                     first)))
        first))
 
@@ -254,16 +342,10 @@
                                      :leader'   leader'})))))))
 
 (defn step-detect-partition
-  "A node can continue running if:
-
-  a.) it has a copy of every partition
-  b.) no other component could have a copy of every partition (really?)
-
-  In our model, we assume one copy of every partition is present on every node.
-
-  I think these aren't the real rules, because in my tests, nodes keep running
-  even when a copy of every partition could exist elsewhere. What I'm actually
-  gonna do here is shut down if you're not connected to a majority."
+  "A node can continue running if its current cluster comprises a majority (or
+  is exactly half but contains the blessed node) of the previously known
+  cluster. To be conservative, I'm going to model this as a strict majority of
+  the *entire* cluster."
   ([s]
    (when-let [node-id (->> s :nodes (filter :alive?) rand-nth :id)]
     (step-detect-partition s node-id)))
@@ -274,22 +356,53 @@
                 (<= (/ (count c) (count (:nodes s))) 1/2))
          (-> s
              (assoc-in [:nodes id :alive?] false)
+             (assoc-in [:nodes id :leader] false)
+             (assoc-in [:nodes id :waiting] {})
+             (assoc-in [:nodes id :returns] {})
              (update :history conj {:step  :detect-partition
                                     :node  id}))))))
+
+(defn step-clear-waiting
+  "After fault resolution and partition detection, nodes can clear out any
+  waiting entries from nodes no longer in their cluster."
+  ([s id]
+   (let [node      (get (:nodes s) id)
+         waiting   (:waiting node)
+         cluster   (:cluster node)
+         waiting'  (->> waiting
+                        (map (fn [[op nodes]]
+                               [op (set/intersection nodes cluster)]))
+                        (into {}))]
+     (when (not= waiting waiting')
+       (-> s
+           (assoc-in [:nodes id :waiting] waiting')
+           (update :history conj {:step     :clear-waiting
+                                  :node     id
+                                  :waiting  waiting
+                                  :waiting' waiting'}))))))
+
+(defn on-live
+  "Applies (step state node-id) to every live node in the cluster--when steps
+  return nil, preserves state as is. Returns new state."
+  [state step]
+  (->> state :nodes vals (filter :alive?) (map :id)
+       (reduce (fn [state node-id]
+                 (or (step state node-id) state))
+               state)))
 
 (defn step
   "Generalized state transition"
   [state]
   (or (step-return-op state)
-      (when (< (rand) 0.1)
+      (when (< (rand) 0.01)
         (step-conn-lost state))
       (when (< (rand) 0.1)
-        ; Atomic full round of partition detection following fault resolution
-        (reduce (fn [state node-id]
-                  (or (step-detect-partition state node-id)
-                      state))
-                (step-resolve-fault state)
-                (keys (:nodes state))))
+        ; Atomic process: fault resolution on any node, then a full round of
+        ; partition detection, then a full round of clear-waiting.
+        (-> state
+            step-resolve-fault
+            (on-live step-detect-partition)
+            (on-live step-clear-waiting)))
       (when (< (rand) 0.9)
         (step-recv-msg state))
       (step-start-op state)
@@ -320,7 +433,7 @@
                                (->> state
                                     (iterate step)
                                     (take len)
-                                    (bad-history lost-writes))))
+                                    (bad-history invariant))))
                        (sort-by (comp count :states))
                        first))))
          doall

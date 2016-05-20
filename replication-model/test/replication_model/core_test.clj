@@ -51,7 +51,9 @@
                  msgs)))))))
 
 (deftest txn-test
-  (dorun (map pprint (take 15 (iterate step (state 3)))))
+;  (binding [clojure.pprint/*print-miser-width* 90
+;            clojure.pprint/*print-right-margin* 100]
+;    (pprint (nth (iterate step (state 3)) 100)))
 
   (let [v (violations (state 3) 10000 100)
         vb (boolean v)]
