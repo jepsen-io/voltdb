@@ -51,7 +51,7 @@
                  msgs)))))))
 
 (deftest txn-test
-;  (dorun (map pprint (take 100 (iterate step (state 3)))))
+  (dorun (map pprint (take 15 (iterate step (state 3)))))
 
   (let [v (violations (state 3) 10000 100)
         vb (boolean v)]

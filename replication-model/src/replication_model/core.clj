@@ -81,6 +81,7 @@
   "A fresh node with the given id"
   [nodes id]
   {:id      id
+   :alive?  true
    :leader? false
    :cluster (set nodes)
    :applied (sorted-set)
@@ -123,10 +124,13 @@
 ;; State transitions
 
 (defn step-start-op
-  "Picks a leader, applies an op to that node locally, and broadcasts an
+  "Picks a live leader, applies an op to that node locally, and broadcasts an
   [:apply op] message to all nodes in the leader's cluster."
   [state]
-  (when-let [id (->> state :nodes vals (filter :leader?) seq rand-nth :id)]
+  (when-let [id (->> state :nodes vals
+                     (filter :leader?)
+                     (filter :alive?)
+                     seq rand-nth :id)]
     (let [op         (:next-op state)
           leader     (get (:nodes state) id)
           recipients (-> (:cluster leader)
@@ -144,35 +148,38 @@
                                               :broadcast-to  recipients})))))
 
 (defn step-recv-msg
-  "Processes a random message, or returns nil if no messages pending."
+  "Processes a random message on an alive node, or returns nil if no messages
+  pending."
   [s]
   (when-let [[net' a b msg] (recv-msg (:net s))]
-    (condp = (first msg)
-      ; Apply message locally and acknowledge
-      :apply (let [op (second msg)]
+    (when (-> s :nodes (get b) :alive?)
+      (condp = (first msg)
+        ; Apply message locally and acknowledge
+        :apply (let [op (second msg)]
+                 (-> s
+                     (update-in [:nodes b :applied] conj op)
+                     (assoc :net (send-msg net' b a [:ack op]))
+                     (update :history conj {:step :apply
+                                            :node b
+                                            :from a
+                                            :op   op})))
+
+        ; Handle an acknowledgement by removing it from the op's wait set.
+        :ack (let [op (second msg)]
                (-> s
-                   (update-in [:nodes b :applied] conj op)
-                   (assoc :net (send-msg net' b a [:ack op]))
-                   (update :history conj {:step :apply
+                   (update-in [:nodes b :waiting op] disj a)
+                   (assoc :net net')
+                   (update :history conj {:step :ack
                                           :node b
                                           :from a
-                                          :op   op})))
-
-      ; Handle an acknowledgement by removing it from the op's wait set.
-      :ack (let [op (second msg)]
-             (-> s
-                 (update-in [:nodes b :waiting op] disj a)
-                 (assoc :net net')
-                 (update :history conj {:step :ack
-                                        :node b
-                                        :from a
-                                        :op   op}))))))
+                                          :op   op})))))))
 
 (defn step-return-op
-  "A node with an empty waiting set for a given write can return a write to the
-  client."
+  "An alive node with an empty waiting set for a given write can return a write
+  to the client."
   [s]
   (->> (shuffle (vals (:nodes s)))
+       (filter :alive?)
        (keep (fn [node]
                (->> (shuffle (vec (:waiting node)))
                     (keep (fn [[op waiting-on]]
@@ -183,7 +190,7 @@
                                   (update-in [:nodes (:id node) :waiting]
                                              dissoc op)
                                   (update :history conj {:step :return-op
-                                                         :node node
+                                                         :node (:id node)
                                                          :op   op})))))
                     first)))
        first))
@@ -196,23 +203,32 @@
       (update :history conj {:step :conn-lost})))
 
 (defn step-resolve-fault
-  "Take a node which believes itself to be a part of its cluster. Declare
-  another node in the cluster, preferably a leader, dead, and atomically shrink
-  all remaining nodes' clusters to the remaining set of live nodes.
+  "Take an alive node which believes itself to be a part of its cluster.
+  Declare another node in the cluster, preferably a leader, dead, and
+  atomically shrink all remaining live nodes' in our cluster to use the new
+  cluster.
 
   If the new cluster contains no leader, chooses a new one."
   [s]
   (when-let [node (->> s :nodes vals
+                       (filter :alive?)
                        (filter #(contains? (:cluster %) (:id %)))
                        seq
                        rand-nth)]
     (let [c (:cluster node)]
       (when-let [candidates (seq (disj c (:id node)))]
         (let [dead    (rand-nth candidates)
-              c'      (disj c dead)
-              leaders (->> c
+              ; In establishing consensus for the new set, we're going to
+              ; deal only with live nodes--won't even try to talk to or include
+              ; dead ones.
+              c'      (->> (disj c dead)
                            (map (:nodes s))
+                           (filter :alive?)
+                           (map :id)
+                           set)
+              leaders (->> (:nodes s)
                            (filter :leader?)
+                           (filter :alive?)
                            (map :id)
                            set)
               leader' (or (some c' leaders)
@@ -237,6 +253,30 @@
                                      :leaders   leaders
                                      :leader'   leader'})))))))
 
+(defn step-detect-partition
+  "A node can continue running if:
+
+  a.) it has a copy of every partition
+  b.) no other component could have a copy of every partition (really?)
+
+  In our model, we assume one copy of every partition is present on every node.
+
+  I think these aren't the real rules, because in my tests, nodes keep running
+  even when a copy of every partition could exist elsewhere. What I'm actually
+  gonna do here is shut down if you're not connected to a majority."
+  ([s]
+   (when-let [node-id (->> s :nodes (filter :alive?) rand-nth :id)]
+    (step-detect-partition s node-id)))
+  ([s id]
+   (let [node (-> s :nodes (get id))
+         c    (:cluster node)]
+     (when (and (:alive? node)
+                (<= (/ (count c) (count (:nodes s))) 1/2))
+         (-> s
+             (assoc-in [:nodes id :alive?] false)
+             (update :history conj {:step  :detect-partition
+                                    :node  id}))))))
+
 (defn step
   "Generalized state transition"
   [state]
@@ -244,7 +284,12 @@
       (when (< (rand) 0.1)
         (step-conn-lost state))
       (when (< (rand) 0.1)
-        (step-resolve-fault state))
+        ; Atomic full round of partition detection following fault resolution
+        (reduce (fn [state node-id]
+                  (or (step-detect-partition state node-id)
+                      state))
+                (step-resolve-fault state)
+                (keys (:nodes state))))
       (when (< (rand) 0.9)
         (step-recv-msg state))
       (step-start-op state)
