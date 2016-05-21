@@ -11,6 +11,11 @@
   (pprint x)
   x)
 
+(defn rand-non-empty-subset
+  "Take some elements from coll as a set"
+  [coll]
+  (set (take (inc (rand-int (count coll))) (shuffle coll))))
+
 ;; Network
 
 (defn net
@@ -80,13 +85,14 @@
 (defn node
   "A fresh node with the given id"
   [nodes id]
-  {:id      id            ; Our node id
-   :alive?  true          ; Is this node alive
-   :leader? false         ; Is this node a leader
-   :cluster (set nodes)   ; Set of cluster node ids
-   :applied (sorted-set)  ; Set of applied writes
-   :waiting {}            ; Map of op ids to sets of nodes waiting
-   :returns {}})          ; Map of op ids to planned return values
+  {:id      id                  ; Our node id
+   :alive?  true                ; Is this node alive
+   :leader? false               ; Is this node a leader
+   :prev-cluster (set nodes)    ; The previous set of cluster node ids
+   :cluster (set nodes)         ; Set of cluster node ids
+   :applied (sorted-set)        ; Set of applied writes
+   :waiting {}                  ; Map of op ids to sets of nodes waiting
+   :returns {}})                ; Map of op ids to planned return values
 
 (defn state
   "A fresh state with n nodes"
@@ -290,11 +296,21 @@
       (update :net drop-conn)
       (update :history conj {:step :conn-lost})))
 
+(defn apply-cluster-change
+  "Applies a cluster change to the local node, returning new node state.
+  Returns nil if change would be invalid."
+  [node change]
+  (when (= (:cluster node) (:cluster change))
+    (assoc node
+           :leader?      (= (:id node) (:leader change))
+           :prev-cluster (:cluster node)
+           :cluster      (:cluster' change))))
+
 (defn step-resolve-fault
-  "Take an alive node which believes itself to be a part of its cluster.
-  Declare another node in the cluster, preferably a leader, dead, and
-  atomically shrink all remaining live nodes' in our cluster to use the new
-  cluster.
+  "Take an alive node which believes itself to be a part of its cluster. Take
+  all nodes which share our belief about the cluster state, and declare at
+  least one of them dead, forming a new candidate cluster. Then broadcast a
+  message for them to adopt the newly selected membership.
 
   If the new cluster contains no leader, chooses a new one."
   [s]
@@ -303,25 +319,35 @@
                        (filter #(contains? (:cluster %) (:id %)))
                        seq
                        rand-nth)]
-    (let [c (:cluster node)]
-      (when-let [candidates (seq (disj c (:id node)))]
-        (let [dead    (rand-nth candidates)
-              ; In establishing consensus for the new set, we're going to
-              ; deal only with live nodes--won't even try to talk to or include
-              ; dead ones.
-              c'      (->> (disj c dead)
-                           (map (:nodes s))
-                           (filter :alive?)
-                           (map :id)
-                           set)
+    (let [c (:cluster node)
+          ; In establishing consensus for the new set, we're going to
+          ; deal only with live nodes--won't even try to talk to or include
+          ; dead ones. We also exclude any nodes which disagree on our
+          ; current cluster.
+          candidates (->> (disj c (:id node))
+                          (map (:nodes s))
+                          (filter :alive?)
+                          (filter #(= c (:cluster %)))
+                          (map :id)
+                          set)]
+      (when (seq candidates)
+        (let [dead    (rand-non-empty-subset candidates)
+              c'      (set/difference c dead)
               leaders (->> (:nodes s)
                            (filter :leader?)
                            (filter :alive?)
                            (map :id)
                            set)
               leader' (or (some c' leaders)
-                          (->> c' seq rand-nth))]
+                          (->> c' seq rand-nth))
+              change  {:cluster   c
+                       :cluster'  c'
+                       :leader    leader'}]
           (-> s
+              ; Apply change locally
+              (update-in [:nodes (:id node)] (appply-cluster-change change))
+              ; Broadcast to peers
+              (assoc-in [:nodes (:id node) :cluster ; TODO HERE
               (assoc :nodes (->> (:nodes s)
                                  (map (fn [[id n]]
                                         (if-not (c' id)
@@ -331,7 +357,10 @@
                                           (let [n (if (= id leader')
                                                     (assoc n :leader? true)
                                                     n)]
-                                            [id (assoc n :cluster c')]))))
+                                            [id (assoc n
+                                                       :prev-cluster
+                                                       (:cluster n)
+                                                       :cluster c')]))))
                                  (into {})))
               (update :history conj {:step      :resolve-fault
                                      :node      (:id node)
@@ -344,23 +373,25 @@
 (defn step-detect-partition
   "A node can continue running if its current cluster comprises a majority (or
   is exactly half but contains the blessed node) of the previously known
-  cluster. To be conservative, I'm going to model this as a strict majority of
-  the *entire* cluster."
+  cluster."
   ([s]
    (when-let [node-id (->> s :nodes (filter :alive?) rand-nth :id)]
     (step-detect-partition s node-id)))
   ([s id]
    (let [node (-> s :nodes (get id))
-         c    (:cluster node)]
-     (when (and (:alive? node)
-                (<= (/ (count c) (count (:nodes s))) 1/2))
-         (-> s
-             (assoc-in [:nodes id :alive?] false)
-             (assoc-in [:nodes id :leader] false)
-             (assoc-in [:nodes id :waiting] {})
-             (assoc-in [:nodes id :returns] {})
-             (update :history conj {:step  :detect-partition
-                                    :node  id}))))))
+         c0   (:prev-cluster node)
+         c    (:cluster node)
+         frac (/ (count c) (count c0))
+         maj? (or (< 1/2 frac)
+                  (and (= 1/2 frac) (= 0 id)))]
+     (when (and (not maj?) (:alive? node))
+       (-> s
+           (assoc-in [:nodes id :alive?] false)
+           (assoc-in [:nodes id :leader] false)
+           (assoc-in [:nodes id :waiting] {})
+           (assoc-in [:nodes id :returns] {})
+           (update :history conj {:step  :detect-partition
+                                  :node  id}))))))
 
 (defn step-clear-waiting
   "After fault resolution and partition detection, nodes can clear out any
