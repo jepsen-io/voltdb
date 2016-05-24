@@ -53,7 +53,7 @@
 (deftest txn-test
   (binding [clojure.pprint/*print-miser-width* 110
             clojure.pprint/*print-right-margin* 110]
-        (pprint (nth (iterate step (state 3)) 100))
+    (pprint (nth (iterate step (state 3)) 100))
 
     (let [v (violations (state 3) 100000 20)
           vb (boolean v)]
