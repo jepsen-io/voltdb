@@ -314,10 +314,10 @@
 
 (defn isolated-killer-nemesis
   "A nemesis which partitions away single nodes, then kills them. On :stop,
-  rejoins the dead node."
+  rejoins the dead nodes."
   []
   (nemesis/node-start-stopper
-    #(take 1 (shuffle %))
+    #(take (rand-int (/ 2 (count %))) (shuffle %))
     (fn [test node]
       ; Isolate this node
       (nemesis/partition! test
@@ -361,7 +361,7 @@
 (defn final-recovery
   "A generator which emits a :stop, followed by a :recover, for the nemesis,
   then sleeps to allow clients to reconnect."
-  [gen]
+  []
   (gen/phases
     (gen/nemesis (gen/once {:type :info :f :stop}))
     (gen/log "Recovering cluster")

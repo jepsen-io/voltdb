@@ -1,6 +1,8 @@
 https://issues.voltdb.com/browse/ENG-10421
-https://issues.voltdb.com/browse/ENG-10389
+https://issues.voltdb.com/browse/ENG-10389 dirty read
 
 If a majority of the cluster crashes, rejoining a crashed node to a remaining
 node will fail because the remaining node is going to kill itself, having
 determined it's in the minority.
+
+https://issues.voltdb.com/browse/ENG-10453 lost writes
