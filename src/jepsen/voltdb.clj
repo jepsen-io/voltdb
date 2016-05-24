@@ -227,8 +227,7 @@
 
     db/LogFiles
     (log-files [db test node]
-      [(str base-dir "/stdout.log")
-       (str base-dir "/log/volt.log")])))
+      [(str base-dir "/log/volt.log")])))
 
 
 (defn connect
