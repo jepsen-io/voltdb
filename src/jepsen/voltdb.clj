@@ -7,6 +7,7 @@
                     [generator    :as gen]
                     [independent  :as independent]
                     [nemesis      :as nemesis]
+                    [net          :as net]
                     [tests        :as tests]]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
@@ -131,6 +132,7 @@
   ([test]
    (jepsen.core/on-nodes test recover!))
   ([test node]
+   (info "recovering" node)
    (start-daemon! test :recover (jepsen/primary test))
    (await-initialization node)))
 
@@ -139,6 +141,7 @@
   multiple rejoins can take down cluster nodes."
   [test node]
   (locking rejoin!
+    (info "rejoining" node)
     (start-daemon! test :rejoin (rand-nth (up-nodes test)))
     (await-rejoin node)))
 
@@ -147,6 +150,13 @@
   [test node]
   (c/su
     (cu/stop-daemon! (str base-dir "/pidfile"))))
+
+(defn stop-recover!
+  "Stops all nodes, then recovers all nodes. Useful when Volt's lost majority
+  and nodes kill themselves."
+  ([test]
+   (jepsen.core/on-nodes test stop!)
+   (jepsen.core/on-nodes test recover!)))
 
 (defn sql-cmd!
   "Takes an SQL query and runs it on the local node via sqlcmd"
@@ -299,3 +309,63 @@
   "Run an ad-hoc SQL stored procedure."
   [client & args]
   (apply call! client "@AdHoc" args))
+
+;; Nemeses
+
+(defn isolated-killer-nemesis
+  "A nemesis which partitions away single nodes, then kills them. On :stop,
+  rejoins the dead node."
+  []
+  (nemesis/node-start-stopper
+    #(take 1 (shuffle %))
+    (fn [test node]
+      ; Isolate this node
+      (nemesis/partition! test
+                          (nemesis/complete-grudge
+                            [[node] (remove #{node} (:nodes test))]))
+      (info "Partitioned away" node)
+      (Thread/sleep 5000)
+      (stop! test node)
+      :killed)
+    (fn [test node]
+      (net/heal! (:net test) test)
+      (info "Network healed")
+      (rejoin! test node)
+      :rejoined)))
+
+(defn recover-nemesis
+  "A nemesis which responds to :recover ops by killing and recovering all nodes
+  in the test."
+  []
+  (reify client/Client
+    (setup! [this test _] this)
+
+    (invoke! [this test op]
+      (assoc op :type :info, :value
+             (case (:f op)
+               :recover (do (stop-recover! test)
+                            [:recovered (:nodes test)]))))
+
+    (teardown! [this test])))
+
+(defn with-recover-nemesis
+  "Merges a recovery nemesis into another nemesis, handling :recover ops by
+  killing and recovering the cluster, and all others passed through to the
+  given nemesis."
+  [nem]
+  (nemesis/compose {#{:recover}                 (recover-nemesis)
+                    #(when (not= :recover %) %) nem}))
+
+;; Generators
+
+(defn final-recovery
+  "A generator which emits a :stop, followed by a :recover, for the nemesis,
+  then sleeps to allow clients to reconnect."
+  [gen]
+  (gen/phases
+    (gen/nemesis (gen/once {:type :info :f :stop}))
+    (gen/log "Recovering cluster")
+    (gen/nemesis
+      (gen/once {:type :info, :f :recover}))
+    (gen/log "Waiting for reconnects")
+    (gen/sleep 10)))

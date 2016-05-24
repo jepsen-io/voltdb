@@ -1,9 +1,8 @@
 (ns jepsen.voltdb.single-register-test
   (:require [clojure.test :refer :all]
+            [jepsen.voltdb-test :refer [tarball]]
             [jepsen.voltdb.single-register :refer :all]
             [jepsen.core :as jepsen]))
-
-(def tarball "http://downloads.voltdb.com/technologies/server/voltdb-ent-latest.tar.gz")
 
 (defn run [t]
   (is (:valid? (:results (jepsen/run! t)))))

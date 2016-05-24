@@ -169,36 +169,18 @@
          :checker (checker/compose
                     {:dirty-reads (checker)
                      :perf   (checker/perf)})
-         :nemesis (nemesis/node-start-stopper
-                    #(take 1 (shuffle %))
-                    (fn [test node]
-                      ; Isolate this node
-                      (nemesis/partition! test
-                        (nemesis/complete-grudge
-                          [[node] (remove #{node} (:nodes test))]))
-                      (info "Partitioned away" node)
-                      (Thread/sleep 5000)
-                      (voltdb/stop! test node)
-                      :killed)
-                    (fn [test node]
-                      (net/heal! (:net test) test)
-                      (info "Network healed")
-                      (voltdb/rejoin! test node)
-                      :rejoined))
+         :nemesis (voltdb/with-recover-nemesis
+                    (voltdb/isolated-killer-nemesis))
          :concurrency 15
          :generator (gen/phases
                       (->> (rw-gen)
                            (gen/delay 1/100)
                            (gen/nemesis
                              (gen/seq (cycle [{:type :info :f :start}
-                                              {:type :info :f :stop}])))
+                                              {:type :info :f :stop}
+                                              (gen/sleep 10)
+                                              {:type :info :f :recover}
+                                              (gen/sleep 10)])))
                            (gen/time-limit 300))
-                      (gen/nemesis (gen/once {:type :info :f :stop}))
-                      (gen/log "Rejoining all down nodes")
-                      (gen/clients
-                        (gen/singlethreaded
-                          (gen/each
-                            (gen/once {:type :invoke :f    :rejoin}))))
-                      (gen/log "Waiting for reconnects")
-                      (gen/sleep 10)
+                      (voltdb/final-recovery)
                       (gen/clients (gen/each (gen/once sr))))))
