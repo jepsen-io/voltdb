@@ -157,7 +157,7 @@
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
   (let [ks [:x :y]
-        system-count 100]
+        system-count 1000]
     (merge tests/noop-test
            opts
            {:name    "voltdb"
@@ -176,7 +176,8 @@
                        {:linear   (independent/checker checker/linearizable)
                         :timeline (independent/checker (timeline/html))
                         :perf     (checker/perf)})
-            :nemesis (nemesis/partition-random-halves)
+            :nemesis (voltdb/with-recover-nemesis
+                       (voltdb/isolated-killer-nemesis))
             :concurrency 100
             :generator (->> (independent/concurrent-generator
                               10
@@ -187,8 +188,10 @@
                                      (gen/delay 1)
                                      (gen/time-limit 30))))
                             (gen/nemesis
-                              (gen/seq (cycle [(gen/sleep 25)
-                                               {:type :info :f :start}
-                                               (gen/sleep 25)
-                                               {:type :info :f :stop}])))
-                            (gen/time-limit (:time-limit opts)))})))
+                              (gen/phases
+                                (gen/sleep 10)
+                                (gen/seq (cycle [{:type :info, :f :start}
+                                                 {:type :info :f :stop}
+                                                 {:type :info :f :recover}]))))
+                            (gen/time-limit (:time-limit opts))
+                            )})))
