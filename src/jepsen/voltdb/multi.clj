@@ -187,11 +187,5 @@
                                      (gen/reserve 5 (read-only-txn-gen ks))
                                      (gen/delay 1)
                                      (gen/time-limit 30))))
-                            (gen/nemesis
-                              (gen/phases
-                                (gen/sleep 10)
-                                (gen/seq (cycle [{:type :info, :f :start}
-                                                 {:type :info :f :stop}
-                                                 {:type :info :f :recover}]))))
-                            (gen/time-limit (:time-limit opts))
-                            )})))
+                            (voltdb/start-stop-recover-gen)
+                            (gen/time-limit (:time-limit opts)))})))

@@ -5,4 +5,6 @@
             [jepsen.core :as jepsen]))
 
 (deftest a-test
-  (is (:valid? (:results (jepsen/run! (dirty-read-test tarball))))))
+  (loop []
+    (when (is (:valid? (:results (jepsen/run! (dirty-read-test tarball)))))
+      (recur))))

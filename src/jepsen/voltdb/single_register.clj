@@ -144,9 +144,5 @@
                                                     r))
                                    (gen/delay 1)
                                    (gen/time-limit 30))))
-                          (gen/nemesis
-                            (gen/seq (cycle [(gen/sleep 25)
-                                             {:type :info :f :start}
-                                             (gen/sleep 25)
-                                             {:type :info :f :stop}])))
+                          (voltdb/simple-partition-nemesis)
                           (gen/time-limit (:time-limit opts)))}))

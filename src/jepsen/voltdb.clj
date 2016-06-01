@@ -369,6 +369,30 @@
 
 ;; Generators
 
+(defn simple-partition-gen
+  "A generator for a nemesis with simple partitions: 25 seconds on, 25 seconds
+  off. Wraps a client gen."
+  [gen]
+  (gen/nemesis (gen/seq (cycle [(gen/sleep 25)
+                                {:type :info, :f :start}
+                                (gen/sleep 25)
+                                {:type :info, :f :stop}]))
+               gen))
+
+(defn start-stop-recover-gen
+  "Generator for a nemesis which starts, stops, and recovers. Wraps a client
+  gen."
+  [gen]
+  (gen/nemesis
+    (gen/phases
+      (gen/sleep 10)
+      (gen/seq (cycle [{:type :info :f :start}
+                       {:type :info :f :stop}
+                       (gen/sleep 10)
+                       {:type :info :f :recover}
+                       (gen/sleep 10)])))
+    gen))
+
 (defn final-recovery
   "A generator which emits a :stop, followed by a :recover, for the nemesis,
   then sleeps to allow clients to reconnect."

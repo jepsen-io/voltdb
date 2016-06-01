@@ -175,12 +175,7 @@
          :generator (gen/phases
                       (->> (rw-gen)
                            (gen/delay 1/100)
-                           (gen/nemesis
-                             (gen/seq (cycle [{:type :info :f :start}
-                                              {:type :info :f :stop}
-                                              (gen/sleep 10)
-                                              {:type :info :f :recover}
-                                              (gen/sleep 10)])))
+                           (voltdb/start-stop-recover-gen)
                            (gen/time-limit 300))
                       (voltdb/final-recovery)
                       (gen/clients (gen/each (gen/once sr))))))
