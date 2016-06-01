@@ -205,6 +205,16 @@
   (sql-cmd! "load classes jepsen-procedures.jar")
   (info node "stored procedures loaded"))
 
+(defn kill-reconnect-threads!
+  "VoltDB client leaks reconnect threads; this kills them all."
+  []
+  (doseq [t (keys (Thread/getAllStackTraces))]
+    (when (= "Retry Connection" (.getName t))
+      ; The reconnect loop swallows Exception so we can't even use interrupt
+      ; here. Luckily I don't think it has too many locks we have to worry
+      ; about.
+      (.stop t))))
+
 (defn db
   "VoltDB around the given package tarball URL"
   [url]
@@ -232,8 +242,9 @@
 
     (teardown! [_ test node]
       (stop! test node)
-      (c/su))
-;        (c/exec :rm :-rf (c/lit (str base-dir "/*")))))
+      (c/su
+        (c/exec :rm :-rf (c/lit (str base-dir "/*"))))
+      (kill-reconnect-threads!))
 
     db/LogFiles
     (log-files [db test node]

@@ -12,4 +12,5 @@
     (when (run (multi-test {:tarball tarball
                             :procedure-call-timeout 1000
                             :time-limit 50}))
-      (recur))))
+      (recur)
+    )))

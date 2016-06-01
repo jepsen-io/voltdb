@@ -19,6 +19,11 @@
             [clojure.tools.logging  :refer [info warn]])
   (:import (knossos.model Model)))
 
+(defn read-only?
+  "Is a transaction a read-only transaction?"
+  [txn]
+  (every? #{:read} (map first txn)))
+
 (defn client
   "A multi-register client. Options:
 
@@ -90,7 +95,7 @@
            (catch org.voltdb.client.NoConnectionsException e
              (assoc op :type :fail, :error :no-conns))
            (catch org.voltdb.client.ProcCallException e
-             (let [type (if (= :read (:f op)) :fail :info)]
+             (let [type (if (read-only? (val (:value op))) :fail :info)]
                (condp re-find (.getMessage e)
                  #"^No response received in the allotted time"
                  (assoc op :type type, :error :timeout)
@@ -135,6 +140,14 @@
   [ks]
   (fn [_ _] {:type :invoke, :f :txn, :value (txn ks)}))
 
+(defn read-only-txn-gen
+  "Generator for read-only transactions."
+  [ks]
+  (fn [_ _]
+    {:type  :invoke
+     :f     :txn
+     :value (mapv (fn [k] [:read k nil]) ks)}))
+
 (defn multi-test
   "Options:
 
@@ -164,12 +177,13 @@
                         :timeline (independent/checker (timeline/html))
                         :perf     (checker/perf)})
             :nemesis (nemesis/partition-random-halves)
-            :concurrency 5
+            :concurrency 100
             :generator (->> (independent/concurrent-generator
-                              1
+                              10
                               (range)
                               (fn [id]
                                 (->> (txn-gen ks)
+                                     (gen/reserve 5 (read-only-txn-gen ks))
                                      (gen/delay 1)
                                      (gen/time-limit 30))))
                             (gen/nemesis
