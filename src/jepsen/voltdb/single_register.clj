@@ -144,5 +144,5 @@
                                                     r))
                                    (gen/delay 1)
                                    (gen/time-limit 30))))
-                          (voltdb/simple-partition-nemesis)
+                          (voltdb/simple-partition-gen)
                           (gen/time-limit (:time-limit opts)))}))
