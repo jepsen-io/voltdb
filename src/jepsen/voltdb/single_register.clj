@@ -132,7 +132,8 @@
                      {:linear (independent/checker checker/linearizable)
                       :timeline (independent/checker (timeline/html))
                       :perf   (checker/perf)})
-          :nemesis (nemesis/partition-random-halves)
+          :nemesis (voltdb/with-recover-nemesis
+                     (voltdb/isolated-killer-nemesis))
           :concurrency 100
           :generator (->> (independent/concurrent-generator
                             10
@@ -144,5 +145,5 @@
                                                     r))
                                    (gen/delay 1)
                                    (gen/time-limit 30))))
-                          (voltdb/simple-partition-gen)
+                          (voltdb/start-stop-recover-gen)
                           (gen/time-limit (:time-limit opts)))}))

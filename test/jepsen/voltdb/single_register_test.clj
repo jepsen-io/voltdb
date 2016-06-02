@@ -8,10 +8,12 @@
   (is (:valid? (:results (jepsen/run! t)))))
 
 (deftest normal-reads-test
-  (run (single-register-test {:tarball tarball
-                              :strong-reads? false
-                              :procedure-call-timeout 45000
-                              :time-limit 60})))
+  (loop []
+    (when (run (single-register-test {:tarball tarball
+                                      :strong-reads? false
+                                      :procedure-call-timeout 45000
+                                      :time-limit 300}))
+               (recur))))
 
 (deftest strong-reads-test
   (loop []
