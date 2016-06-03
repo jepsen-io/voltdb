@@ -107,7 +107,7 @@
                                   (map :value))
             strong-reads (reduce set/union strong-read-sets)
             unseen       (set/difference strong-reads reads)
-            missing      (set/difference reads strong-reads)
+            dirty        (set/difference reads strong-reads)
             lost         (set/difference writes strong-reads)]
         ; We expect one strong read per node
         (info :strong-read-sets (count strong-read-sets))
@@ -116,12 +116,12 @@
         ; All strong reads had darn well better be equal
         (assert (apply = (map count (cons strong-reads strong-read-sets))))
 
-        {:valid?            (and (empty? missing) (empty? lost))
+        {:valid?            (and (empty? dirty) (empty? lost))
          :read-count        (count reads)
          :strong-read-count (count strong-reads)
          :unseen-count      (count unseen)
-         :missing-count     (count missing)
-         :missing           missing
+         :dirty-count       (count dirty)
+         :dirty             dirty
          :lost-count        (count lost)
          :lost              lost}))))
 
