@@ -32,11 +32,16 @@
   "Install the given tarball URL"
   [node url]
   (c/su
+    (debian/install ["python2.7"])
+    (c/exec :update-alternatives :--install "/usr/bin/python" "python"
+            "/usr/bin/python2.7" 1)
     (debian/install-jdk8!)
     (info "JDK8 installed")
     (cu/install-tarball! node url base-dir)
+    (c/exec :mkdir (str base-dir "/log"))
     (cu/ensure-user! username)
     (c/exec :chown :-R (str username ":" username) base-dir)
+
     (info "VoltDB unpacked")))
 
 (defn deployment-xml
@@ -89,37 +94,40 @@
   "Blocks until the logfile reports 'Server completed initialization'."
   [node]
   (info "Waiting for" node "to initialize")
-  (c/cd base-dir
-        ; hack hack hack
-        (Thread/sleep 5000)
-        (c/exec :tail :-n 1 :-f "log/volt.log"
-                | :grep :-m 1 "completed initialization"
-                | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
-  (info node "initialized"))
+  (c/sudo username
+          (c/cd base-dir
+                ; hack hack hack
+                (Thread/sleep 5000)
+                (c/exec :tail :-n 1 :-f "log/volt.log"
+                        | :grep :-m 1 "completed initialization"
+                        | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
+          (info node "initialized")))
 
 (defn await-rejoin
   "Blocks until the logfile reports 'Node rejoin completed'"
   [node]
   (info "Waiting for" node "to rejoin")
-  (c/cd base-dir
-        ; hack hack hack
-        (Thread/sleep 5000)
-        (c/exec :tail :-n 1 :-f "log/volt.log"
-                | :grep :-m 1 "Node rejoin completed"
-                | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
-  (info node "rejoined"))
+  (c/sudo username
+          (c/cd base-dir
+                ; hack hack hack
+                (Thread/sleep 5000)
+                (c/exec :tail :-n 1 :-f "log/volt.log"
+                        | :grep :-m 1 "Node rejoin completed"
+                        | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
+          (info node "rejoined")))
 
 (defn start-daemon!
   "Starts the daemon with the given command."
   [test cmd host]
   (c/sudo username
-    (cu/start-daemon! {:logfile (str base-dir "/stdout.log")
-                       :pidfile (str base-dir "/pidfile")
-                       :chdir   base-dir}
-                      (str base-dir "/bin/voltdb")
-                      cmd
-                      :--deployment (str base-dir "/deployment.xml")
-                      :--host host)))
+          (c/cd base-dir
+                (cu/start-daemon! {:logfile (str base-dir "/log/stdout.log")
+                                   :pidfile (str base-dir "/pidfile")
+                                   :chdir   base-dir}
+                                  (str base-dir "/bin/voltdb")
+                                  cmd
+                                  :--deployment (str base-dir "/deployment.xml")
+                                  :--host host))))
 
 (defn start!
   "Starts voltdb, creating a fresh DB"
@@ -248,7 +256,8 @@
 
     db/LogFiles
     (log-files [db test node]
-      [(str base-dir "/log/volt.log")])))
+      [(str base-dir "/log/stdout.log")
+       (str base-dir "/log/volt.log")])))
 
 
 (defn connect
