@@ -8,6 +8,7 @@
                     [generator    :as gen]
                     [independent  :as independent]
                     [nemesis      :as nemesis]
+                    [os           :as os]
                     [tests        :as tests]]
             [jepsen.os.debian     :as debian]
             [jepsen.checker.timeline :as timeline]
@@ -116,13 +117,14 @@
       :tarball                      URL to an enterprise voltdb tarball.
       :strong-reads?                Whether to perform normal or strong selects
       :no-reads?                    Don't bother with reads at all
+      :skip-os?                     Skip OS setup
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
   (merge tests/noop-test
          opts
          {:name    "voltdb single"
-          :os      debian/os
+          :os      (if (:skip-os? opts) os/noop debian/os)
           :client  (client (select-keys opts [:strong-reads?
                                               :procedure-call-timeout
                                               :connection-response-timeout]))

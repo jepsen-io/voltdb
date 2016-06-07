@@ -16,6 +16,7 @@
                     [independent  :as independent]
                     [nemesis      :as nemesis]
                     [net          :as net]
+                    [os           :as os]
                     [util         :as util]
                     [tests        :as tests]]
             [jepsen.os.debian     :as debian]
@@ -167,11 +168,12 @@
   :tarball                      A tarball URL for VoltDB
   :procedure-call-timeout       How long in ms to wait for proc calls
   :connection-response-timeout  How long in ms to wait for connections
-  :time-limit                   How long to run test for, in seconds"
+  :time-limit                   How long to run test for, in seconds
+  :skip-os?                     Skip OS setup"
   [opts]
   (assoc tests/noop-test
          :name    "voltdb dirty-read"
-         :os      debian/os
+         :os      (if (:skip-os? opts) os/noop debian/os)
          :client  (client opts)
          :db      (voltdb/db (:tarball opts))
          :model   (model/cas-register 0)

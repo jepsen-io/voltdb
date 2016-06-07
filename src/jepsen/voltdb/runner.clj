@@ -44,6 +44,8 @@
 
    [nil "--strong-reads" "Use stored procedure including a write for all reads"]
 
+   [nil "--skip-os" "Don't perform OS setup"]
+
    ["-p" "--procedure-call-timeout MILLISECONDS"
     "How long should we wait before timing out procedure calls?"
     :default 1000
@@ -84,6 +86,18 @@ Test names: " (str/join ", " (keys tests))
     parsed
     (update parsed :errors conj "No tarball URL provided")))
 
+(defn rename-keys
+  "Given a map m, and a map of keys to replacement keys, yields m with keys
+  renamed."
+  [m replacements]
+  (reduce (fn [m [k k']]
+            (-> m
+                (assoc k' (get m k))
+                (dissoc k)))
+          m
+          replacements))
+
+
 (defn -main
   [& args]
   (try
@@ -94,11 +108,9 @@ Test names: " (str/join ", " (keys tests))
                                (cli/parse-opts optspec)
                                validate-test-name
                                validate-tarball)
-          options (-> options
-                      (assoc :strong-reads? (:strong-reads options))
-                      (assoc :no-reads? (:no-reads options))
-                      (dissoc :strong-reads)
-                      (dissoc :no-reads))
+          options (rename-keys options {:strong-reads :strong-reads?
+                                        :no-reads     :no-reads?
+                                        :skip-os      :skip-os?})
           test-fn (get tests (first args))]
 
       ; Help?

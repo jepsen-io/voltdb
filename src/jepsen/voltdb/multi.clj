@@ -7,6 +7,7 @@
                     [generator      :as gen]
                     [independent    :as independent]
                     [nemesis        :as nemesis]
+                    [os             :as os]
                     [tests          :as tests]]
             [jepsen.os.debian       :as debian]
             [jepsen.checker.timeline :as timeline]
@@ -152,7 +153,8 @@
   "Options:
 
       :time-limit                   How long should we run the test for?
-      :tarball                      URL to an enterprise voltdb tarball.
+      :tarball                      URL to an enterprise voltdb tarball
+      :skip-os?                     Skip OS setup
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
@@ -161,7 +163,7 @@
     (merge tests/noop-test
            opts
            {:name    "voltdb multi"
-            :os      debian/os
+            :os      (if (:skip-os? opts) os/noop debian/os)
             :client  (client (merge
                                {:keys         ks
                                 :system-count system-count}
