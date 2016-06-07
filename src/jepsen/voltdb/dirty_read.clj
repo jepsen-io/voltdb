@@ -29,12 +29,16 @@
 
 (defn client
   "A single-register client."
-  ([] (client nil nil))
-  ([node conn]
+  ([opts] (client opts nil nil))
+  ([opts node conn]
    (let [initialized? (promise)]
      (reify client/Client
        (setup! [_ test node]
-         (let [conn (voltdb/connect node)]
+         (let [conn (voltdb/connect
+                      node
+                      (select-keys opts
+                                   [:procedure-call-timeout
+                                    :connection-response-timeout]))]
            (c/on node
                  (when (deliver initialized? true)
                    ; Create table
@@ -46,7 +50,7 @@
                    (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
                                     jepsen.procedures.DirtyReadStrongRead;")
                    (info node "table created")))
-           (client node conn)))
+           (client opts node conn)))
 
        (invoke! [this test op]
          (try
@@ -158,13 +162,18 @@
             {:type :invoke, :f :read, :value (nth @in-flight n)}))))))
 
 (defn dirty-read-test
-  "Takes a tarball URL"
-  [url]
+  "Takes an options map. Options:
+
+  :tarball                      A tarball URL for VoltDB
+  :procedure-call-timeout       How long in ms to wait for proc calls
+  :connection-response-timeout  How long in ms to wait for connections
+  :time-limit                   How long to run test for, in seconds"
+  [opts]
   (assoc tests/noop-test
-         :name    "voltdb"
+         :name    "voltdb dirty-read"
          :os      debian/os
-         :client  (client)
-         :db      (voltdb/db url)
+         :client  (client opts)
+         :db      (voltdb/db (:tarball opts))
          :model   (model/cas-register 0)
          :checker (checker/compose
                     {:dirty-reads (checker)
@@ -176,6 +185,6 @@
                       (->> (rw-gen)
                            (gen/delay 1/100)
                            (voltdb/start-stop-recover-gen)
-                           (gen/time-limit 300))
+                           (gen/time-limit (:time-limit opts)))
                       (voltdb/final-recovery)
                       (gen/clients (gen/each (gen/once sr))))))

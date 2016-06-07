@@ -81,7 +81,7 @@
   [url]
   (let [n 5]
     (assoc tests/noop-test
-           :name    "voltdb"
+           :name    "voltdb redundant-register"
            :os      debian/os
            :client  (client n nil)
            :db      (voltdb/db url)

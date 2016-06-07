@@ -160,7 +160,7 @@
         system-count 1000]
     (merge tests/noop-test
            opts
-           {:name    "voltdb"
+           {:name    "voltdb multi"
             :os      debian/os
             :client  (client (merge
                                {:keys         ks

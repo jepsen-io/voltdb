@@ -1,4 +1,4 @@
-(ns jepsen.voltdb.single-register
+(ns jepsen.voltdb.single
   "Implements a table of single registers identified by id. Verifies
   linearizability over independent registers."
   (:require [jepsen [core         :as jepsen]
@@ -109,7 +109,7 @@
 (defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})
 (defn cas [_ _] {:type :invoke, :f :cas, :value [(rand-int 5) (rand-int 5)]})
 
-(defn single-register-test
+(defn single-test
   "Options:
 
       :time-limit                   How long should we run the test for?
@@ -121,7 +121,7 @@
   [opts]
   (merge tests/noop-test
          opts
-         {:name    "voltdb"
+         {:name    "voltdb single"
           :os      debian/os
           :client  (client (select-keys opts [:strong-reads?
                                               :procedure-call-timeout
