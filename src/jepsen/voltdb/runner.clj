@@ -115,9 +115,11 @@ Test names: " (str/join ", " (keys tests))
       (info "Test options:\n" (with-out-str (pprint options)))
 
       ; Run test
-      (let [t (jepsen/run! (test-fn options))]
-        (System/exit (if (:valid? (:results t)) 0 1))))
+      (dotimes [i (:test-count options)]
+        (when-not (:valid? (:results (jepsen/run! (test-fn options))))
+          (System/exit 1)))
 
+      (System/exit 0))
     (catch Throwable t
       (fatal t "Oh jeez, I'm sorry, Jepsen broke. Here's why:")
       (System/exit 255))))
