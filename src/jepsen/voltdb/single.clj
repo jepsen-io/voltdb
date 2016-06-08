@@ -111,25 +111,19 @@
 (defn cas [_ _] {:type :invoke, :f :cas, :value [(rand-int 5) (rand-int 5)]})
 
 (defn single-test
-  "Options:
+  "Special options, in addition to voltdb/base-test:
 
       :time-limit                   How long should we run the test for?
-      :tarball                      URL to an enterprise voltdb tarball.
-      :force-download?              Always download tarball URL
       :strong-reads?                Whether to perform normal or strong selects
       :no-reads?                    Don't bother with reads at all
-      :skip-os?                     Skip OS setup
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
-  (merge tests/noop-test
-         opts
+  (merge (voltdb/base-test opts)
          {:name    "voltdb single"
-          :os      (if (:skip-os? opts) os/noop debian/os)
           :client  (client (select-keys opts [:strong-reads?
                                               :procedure-call-timeout
                                               :connection-response-timeout]))
-          :db      (voltdb/db (:tarball opts) (:force-download? opts))
           :model   (model/cas-register nil)
           :checker (checker/compose
                      {:linear (independent/checker checker/linearizable)

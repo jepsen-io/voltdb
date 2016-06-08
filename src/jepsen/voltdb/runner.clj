@@ -24,9 +24,17 @@
    "single"      single/single-test
    "dirty-read"  dirty-read/dirty-read-test})
 
+(def default-hosts [:n1 :n2 :n3 :n4 :n5])
+
 (def optspec
   "Command line options for tools.cli"
   [["-h" "--help" "Print out this message and exit"]
+
+   ["-n" "--node HOSTNAME" "Node(s) to run test on"
+    :default default-hosts
+    :assoc-fn (fn [m k v] (if (identical? (get m k) default-hosts)
+                            (assoc m k [v]) ; Replace with given host
+                            (update m k conj v)))]
 
    ["-t" "--time-limit SECONDS"
     "Excluding setup and teardown, how long should a test run for, in seconds?"
@@ -113,7 +121,8 @@ Test names: " (str/join ", " (keys tests))
           options (rename-keys options {:strong-reads     :strong-reads?
                                         :no-reads         :no-reads?
                                         :force-download   :force-download?
-                                        :skip-os          :skip-os?})
+                                        :skip-os          :skip-os?
+                                        :node             :nodes})
           test-fn (get tests (first args))]
 
       ; Help?

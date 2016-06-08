@@ -9,6 +9,7 @@
                     [nemesis      :as nemesis]
                     [net          :as net]
                     [tests        :as tests]]
+            [jepsen.os            :as os]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
             [knossos.model        :as model]
@@ -413,3 +414,17 @@
       (gen/once {:type :info, :f :recover}))
     (gen/log "Waiting for reconnects")
     (gen/sleep 10)))
+
+(defn base-test
+  "Constructs a basic test case with common options.
+
+        :tarball                      URL to an enterprise voltdb tarball
+        :skip-os?                     Skip OS setup
+        :force-download?              Always download tarball URL
+        :nodes                        Nodes to run against"
+  [opts]
+  (merge tests/noop-test
+         opts
+         {:name "voltdb"
+          :os   (if (:skip-os? opts) os/noop debian/os)
+          :db   (db (:tarball opts) (:force-download? opts))}))

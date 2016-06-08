@@ -150,21 +150,16 @@
      :value (mapv (fn [k] [:read k nil]) ks)}))
 
 (defn multi-test
-  "Options:
+  "Special options, in addition to voltdb/base-test:
 
       :time-limit                   How long should we run the test for?
-      :tarball                      URL to an enterprise voltdb tarball
-      :skip-os?                     Skip OS setup
-      :force-download?              Always download tarball URL
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
   (let [ks [:x :y]
         system-count 1000]
-    (merge tests/noop-test
-           opts
+    (merge (voltdb/base-test opts)
            {:name    "voltdb multi"
-            :os      (if (:skip-os? opts) os/noop debian/os)
             :client  (client (merge
                                {:keys         ks
                                 :system-count system-count}
@@ -173,7 +168,6 @@
                                              :system-count
                                              :procedure-call-timeout
                                              :connection-response-timeout])))
-            :db      (voltdb/db (:tarball opts) (:force-download? opts))
             :model   (model/multi-register (zipmap ks (repeat 0)))
             :checker (checker/compose
                        {:linear   (independent/checker checker/linearizable)
