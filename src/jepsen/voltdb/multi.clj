@@ -155,6 +155,7 @@
       :time-limit                   How long should we run the test for?
       :tarball                      URL to an enterprise voltdb tarball
       :skip-os?                     Skip OS setup
+      :force-download?              Always download tarball URL
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
@@ -172,7 +173,7 @@
                                              :system-count
                                              :procedure-call-timeout
                                              :connection-response-timeout])))
-            :db      (voltdb/db (:tarball opts))
+            :db      (voltdb/db (:tarball opts) (:force-download? opts))
             :model   (model/multi-register (zipmap ks (repeat 0)))
             :checker (checker/compose
                        {:linear   (independent/checker checker/linearizable)

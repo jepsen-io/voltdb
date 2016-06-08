@@ -30,14 +30,14 @@
 
 (defn install!
   "Install the given tarball URL"
-  [node url]
+  [node url force?]
   (c/su
     (debian/install ["python2.7"])
     (c/exec :update-alternatives :--install "/usr/bin/python" "python"
             "/usr/bin/python2.7" 1)
     (debian/install-jdk8!)
     (info "JDK8 installed")
-    (cu/install-tarball! node url base-dir)
+    (cu/install-tarball! node url base-dir force?)
     (c/exec :mkdir (str base-dir "/log"))
     (cu/ensure-user! username)
     (c/exec :chown :-R (str username ":" username) base-dir)
@@ -225,11 +225,11 @@
 
 (defn db
   "VoltDB around the given package tarball URL"
-  [url]
+  [url force-download?]
   (reify db/DB
     (setup! [_ test node]
       ; Download and unpack
-      (install! node url)
+      (install! node url force-download?)
 
       ; Prepare stored procedures in parallel
       (let [procedures (future (when (= node (jepsen/primary test))

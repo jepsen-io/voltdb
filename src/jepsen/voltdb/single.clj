@@ -115,6 +115,7 @@
 
       :time-limit                   How long should we run the test for?
       :tarball                      URL to an enterprise voltdb tarball.
+      :force-download?              Always download tarball URL
       :strong-reads?                Whether to perform normal or strong selects
       :no-reads?                    Don't bother with reads at all
       :skip-os?                     Skip OS setup
@@ -128,7 +129,7 @@
           :client  (client (select-keys opts [:strong-reads?
                                               :procedure-call-timeout
                                               :connection-response-timeout]))
-          :db      (voltdb/db (:tarball opts))
+          :db      (voltdb/db (:tarball opts) (:force-download? opts))
           :model   (model/cas-register nil)
           :checker (checker/compose
                      {:linear (independent/checker checker/linearizable)

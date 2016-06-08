@@ -169,13 +169,14 @@
   :procedure-call-timeout       How long in ms to wait for proc calls
   :connection-response-timeout  How long in ms to wait for connections
   :time-limit                   How long to run test for, in seconds
-  :skip-os?                     Skip OS setup"
+  :skip-os?                     Skip OS setup
+  :force-download?              Always download tarball URL"
   [opts]
   (assoc tests/noop-test
          :name    "voltdb dirty-read"
          :os      (if (:skip-os? opts) os/noop debian/os)
          :client  (client opts)
-         :db      (voltdb/db (:tarball opts))
+         :db      (voltdb/db (:tarball opts) (:force-download? opts))
          :model   (model/cas-register 0)
          :checker (checker/compose
                     {:dirty-reads (checker)

@@ -46,6 +46,8 @@
 
    [nil "--skip-os" "Don't perform OS setup"]
 
+   [nil "--force-download" "Always download HTTP/S tarballs"]
+
    ["-p" "--procedure-call-timeout MILLISECONDS"
     "How long should we wait before timing out procedure calls?"
     :default 1000
@@ -108,9 +110,10 @@ Test names: " (str/join ", " (keys tests))
                                (cli/parse-opts optspec)
                                validate-test-name
                                validate-tarball)
-          options (rename-keys options {:strong-reads :strong-reads?
-                                        :no-reads     :no-reads?
-                                        :skip-os      :skip-os?})
+          options (rename-keys options {:strong-reads     :strong-reads?
+                                        :no-reads         :no-reads?
+                                        :force-download   :force-download?
+                                        :skip-os          :skip-os?})
           test-fn (get tests (first args))]
 
       ; Help?
