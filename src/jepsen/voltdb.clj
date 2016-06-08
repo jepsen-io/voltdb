@@ -56,7 +56,7 @@
        [:paths {}
         [:voltdbroot {:path base-dir}]]
        [:heartbeat {:timeout 5}] ; seconds
-       [:commandlog {:enabled true, :synchronous true}
+       [:commandlog {:enabled true, :synchronous true, :logsize 128}
         [:frequency {:time 2}]]]))) ; milliseconds
 
 (defn configure!
