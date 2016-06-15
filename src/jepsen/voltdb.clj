@@ -529,8 +529,8 @@
 
 (defn isolate-thirst-kill-gen
   "Isolates a minority set of nodes, spams them with random operations, then
-  performs global recovery."
-  []
+  performs global recovery. Takes a recovery delay in seconds."
+  [recovery-delay]
   (let [state      (atom {:type :info, :f :recover, :value nil})
         transition (fn [s test]
                      (case (:f s)
@@ -540,7 +540,10 @@
                        :isolate (assoc s :f :recover, :value nil)))]
     (reify gen/Generator
       (op [_ test process]
-        (swap! state transition test)))))
+        (let [op (swap! state transition test)]
+          (when (and recovery-delay (= :recover (:f op)))
+            (Thread/sleep (* 1000 recovery-delay)))
+          op)))))
 
 (defn general-gen
   "Emits a random mixture of partitions, node failures/rejoins, and recoveries,
@@ -551,7 +554,7 @@
        (gen/nemesis
          (gen/phases
            (gen/sleep 5)
-           (isolate-thirst-kill-gen)))
+           (isolate-thirst-kill-gen (:recovery-delay opts))))
        (gen/time-limit (:time-limit opts))))
 
 (defn final-recovery

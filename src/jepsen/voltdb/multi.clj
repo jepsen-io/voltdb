@@ -175,13 +175,15 @@
                          :timeline (independent/checker (timeline/html))
                          :perf     (checker/perf)})
              :nemesis (voltdb/general-nemesis)
+             :recovery-delay (:recovery-delay opts 30)
              :concurrency 100
              :generator (->> (independent/concurrent-generator
                                10
                                (range)
                                (fn [id]
                                  (->> (txn-gen ks)
+                                      (gen/stagger 5)
                                       (gen/reserve 5 (read-only-txn-gen ks))
                                       (gen/stagger 1)
-                                      (gen/time-limit 30))))
+                                      (gen/time-limit 120))))
                              (voltdb/general-gen opts))))))

@@ -42,6 +42,12 @@
     :parse-fn #(Long/parseLong %)
     :validate [pos? "Must be positive"]]
 
+   [nil "--recovery-delay SECONDS"
+    "How long should we wait before killing nodes and recovering?"
+    :default 0
+    :parse-fn #(Long/parseLong %)
+    :validate [pos? "Must be positive"]]
+
    ["-c" "--test-count NUMBER"
     "How many times should we repeat a test?"
     :default  1
