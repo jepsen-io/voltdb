@@ -9,7 +9,7 @@
                     [nemesis      :as nemesis]
                     [net          :as net]
                     [tests        :as tests]
-                    [util         :as util]]
+                    [util         :as util :refer [meh timeout]]]
             [jepsen.os            :as os]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
@@ -62,7 +62,7 @@
        ; isolated nodes with requests *before* they kill themselves
        ; but low enough that a new majority is elected and performs
        ; some operations.
-       [:heartbeat {:timeout 1}] ; seconds
+       [:heartbeat {:timeout 2}] ; seconds
        [:commandlog {:enabled true, :synchronous true, :logsize 128}
         [:frequency {:time 2}]]]))) ; milliseconds
 
@@ -102,14 +102,23 @@
   "Blocks until the logfile reports 'Server completed initialization'."
   [node]
   (info "Waiting for" node "to initialize")
-  (c/sudo username
-          (c/cd base-dir
-                ; hack hack hack
-                (Thread/sleep 5000)
-                (c/exec :tail :-n 1 :-f "log/volt.log"
-                        | :grep :-m 1 "completed initialization"
-                        | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
-          (info node "initialized")))
+  (timeout 120000
+           (throw (RuntimeException.
+                    (str node " failed to initialize in time; STDOUT:\n\n"
+                         (meh (c/exec :tail :-n 10
+                                      (str base-dir "/log/stdout.log")))
+                         "\n\nLOG:\n\n"
+                         (meh (c/exec :tail :-n 10
+                                      (str base-dir "/log/volt.log")))
+                         "\n\n")))
+           (c/sudo username
+                   (c/cd base-dir
+                         ; hack hack hack
+                         (Thread/sleep 5000)
+                         (c/exec :tail :-n 1 :-f "log/volt.log"
+                                 | :grep :-m 1 "completed initialization"
+                                 | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
+                   (info node "initialized"))))
 
 (defn await-rejoin
   "Blocks until the logfile reports 'Node rejoin completed'"
