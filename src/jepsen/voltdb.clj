@@ -454,8 +454,10 @@
                               :reconnect? false})]
            (future
              (try
-               (dotimes [i 100000]
+               (dotimes [i 50000]
 ;                 (call! conn "MENTIONS.insert" i (rand-int 1000)))
+                 ; If we go TOO fast we'll start forcing other ops to time
+                 ; out. If we go too slow we won't get a long enough log.
                  (Thread/sleep 1)
                  (async-call!
                    conn "MENTIONS.insert" i (rand-int 1000)
@@ -557,7 +559,6 @@
   then sleeps to allow clients to reconnect."
   []
   (gen/phases
-    (gen/nemesis (gen/once {:type :info :f :heal}))
     (gen/log "Recovering cluster")
     (gen/nemesis
       (gen/once {:type :info, :f :recover}))

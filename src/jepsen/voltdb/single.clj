@@ -138,9 +138,10 @@
                              (range)
                              (fn [id]
                                (->> (gen/mix [w cas])
+                                    (gen/stagger 2)
                                     (gen/reserve 5 (if (:no-reads? opts)
-                                                     cas
+                                                     (gen/stagger 2 cas)
                                                      r))
-                                    (gen/stagger 1)
-                                    (gen/time-limit 30))))
+                                    (gen/stagger 1/2)
+                                    (gen/time-limit 60))))
                            (voltdb/general-gen opts)))))
