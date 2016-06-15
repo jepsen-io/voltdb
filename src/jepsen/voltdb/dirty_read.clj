@@ -169,20 +169,19 @@
   :connection-response-timeout  How long in ms to wait for connections
   :time-limit                   How long to run test for, in seconds"
   [opts]
-  (merge (voltdb/base-test opts)
-         {:name    "voltdb dirty-read"
-          :client  (client opts)
-          :model   (model/cas-register 0)
-          :checker (checker/compose
-                     {:dirty-reads (checker)
-                      :perf   (checker/perf)})
-          :nemesis (voltdb/with-recover-nemesis
-                     (voltdb/isolated-killer-nemesis))
-          :concurrency 15
-          :generator (gen/phases
-                       (->> (rw-gen)
-                            (gen/delay 1/100)
-                            (voltdb/start-stop-recover-gen)
-                            (gen/time-limit (:time-limit opts)))
-                       (voltdb/final-recovery)
-                       (gen/clients (gen/each (gen/once sr))))}))
+  (voltdb/base-test
+    (assoc opts
+           :name    "voltdb dirty-read"
+           :client  (client opts)
+           :model   (model/cas-register 0)
+           :checker (checker/compose
+                      {:dirty-reads (checker)
+                       :perf   (checker/perf)})
+           :nemesis (voltdb/general-nemesis)
+           :concurrency 15
+           :generator (gen/phases
+                        (->> (rw-gen)
+                             (gen/stagger 1/100)
+                             (voltdb/general-gen opts))
+                        (voltdb/final-recovery)
+                        (gen/clients (gen/each (gen/once sr)))))))

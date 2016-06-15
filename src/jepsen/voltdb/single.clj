@@ -88,6 +88,7 @@
                         (assert (#{0 1} res))
                         (assoc op :type (if (zero? res) :fail :ok)))))
            (catch org.voltdb.client.NoConnectionsException e
+             (Thread/sleep 1000)
              (assoc op :type :fail, :error :no-conns))
            (catch org.voltdb.client.ProcCallException e
              (let [type (if (= :read (:f op)) :fail :info)]
@@ -117,30 +118,29 @@
       :strong-reads?                Whether to perform normal or strong selects
       :no-reads?                    Don't bother with reads at all
       :procedure-call-timeout       How long in ms to wait for proc calls
-      :connection-response-timeout  How long in ms to wait for connections"
+  :connection-response-timeout  How long in ms to wait for connections"
   [opts]
-  (merge (voltdb/base-test opts)
-         {:name    "voltdb single"
-          :client  (client (select-keys opts [:strong-reads?
-                                              :procedure-call-timeout
-                                              :connection-response-timeout]))
-          :model   (model/cas-register nil)
-          :checker (checker/compose
-                     {:linear (independent/checker checker/linearizable)
-                      :timeline (independent/checker (timeline/html))
-                      :perf   (checker/perf)})
-          :nemesis (voltdb/with-recover-nemesis
-                     (voltdb/isolated-killer-nemesis))
-          :concurrency 100
-          :generator (->> (independent/concurrent-generator
-                            10
-                            (range)
-                            (fn [id]
-                              (->> (gen/mix [w cas])
-                                   (gen/reserve 5 (if (:no-reads? opts)
-                                                    cas
-                                                    r))
-                                   (gen/delay 1)
-                                   (gen/time-limit 30))))
-                          (voltdb/start-stop-recover-gen)
-                          (gen/time-limit (:time-limit opts)))}))
+  (voltdb/base-test
+    (assoc opts
+           :name    "voltdb single"
+           :client  (client (select-keys opts [:strong-reads?
+                                               :procedure-call-timeout
+                                               :connection-response-timeout]))
+           :model   (model/cas-register nil)
+           :checker (checker/compose
+                      {:linear   (independent/checker checker/linearizable)
+                       :timeline (independent/checker (timeline/html))
+                       :perf     (checker/perf)})
+           :nemesis (voltdb/general-nemesis)
+           :concurrency 100
+           :generator (->> (independent/concurrent-generator
+                             10
+                             (range)
+                             (fn [id]
+                               (->> (gen/mix [w cas])
+                                    (gen/reserve 5 (if (:no-reads? opts)
+                                                     cas
+                                                     r))
+                                    (gen/stagger 1)
+                                    (gen/time-limit 30))))
+                           (voltdb/general-gen opts)))))

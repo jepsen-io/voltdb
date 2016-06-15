@@ -81,10 +81,16 @@ Test names: " (str/join ", " (keys tests))
 
 (defn validate-test-name
   "Takes a tools.cli result map, and adds an error if the given
-  arguments don't specify a valid test"
+  arguments don't specify a valid test. Associates :test-fn otherwise."
   [parsed]
   (if (= 1 (count (:arguments parsed)))
-    parsed
+    (let [test-name (first (:arguments parsed))]
+      (if-let [f (get tests test-name)]
+        (assoc parsed :test-fn f)
+        (update parsed :errors conj
+                (str "I don't know how to run " test-name
+                     ", but I do know about "
+                     (str/join ", " (keys tests))))))
     (update parsed :errors conj
             (str "No test name was provided. Use one of "
                  (str/join ", " (keys tests))))))
@@ -114,7 +120,8 @@ Test names: " (str/join ", " (keys tests))
     (let [{:keys [options
                   arguments
                   summary
-                  errors]} (-> args
+                  errors
+                  test-fn]} (-> args
                                (cli/parse-opts optspec)
                                validate-test-name
                                validate-tarball)
@@ -122,8 +129,7 @@ Test names: " (str/join ", " (keys tests))
                                         :no-reads         :no-reads?
                                         :force-download   :force-download?
                                         :skip-os          :skip-os?
-                                        :node             :nodes})
-          test-fn (get tests (first args))]
+                                        :node             :nodes})]
 
       ; Help?
       (when (:help options)

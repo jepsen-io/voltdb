@@ -158,31 +158,30 @@
   [opts]
   (let [ks [:x :y]
         system-count 1000]
-    (merge (voltdb/base-test opts)
-           {:name    "voltdb multi"
-            :client  (client (merge
-                               {:keys         ks
-                                :system-count system-count}
-                               (select-keys opts
-                                            [:keys
-                                             :system-count
-                                             :procedure-call-timeout
-                                             :connection-response-timeout])))
-            :model   (model/multi-register (zipmap ks (repeat 0)))
-            :checker (checker/compose
-                       {:linear   (independent/checker checker/linearizable)
-                        :timeline (independent/checker (timeline/html))
-                        :perf     (checker/perf)})
-            :nemesis (voltdb/with-recover-nemesis
-                       (voltdb/isolated-killer-nemesis))
-            :concurrency 100
-            :generator (->> (independent/concurrent-generator
-                              10
-                              (range)
-                              (fn [id]
-                                (->> (txn-gen ks)
-                                     (gen/reserve 5 (read-only-txn-gen ks))
-                                     (gen/delay 1)
-                                     (gen/time-limit 30))))
-                            (voltdb/start-stop-recover-gen)
-                            (gen/time-limit (:time-limit opts)))})))
+    (voltdb/base-test
+      (assoc opts
+             :name    "voltdb multi"
+             :client  (client (merge
+                                {:keys         ks
+                                 :system-count system-count}
+                                (select-keys opts
+                                             [:keys
+                                              :system-count
+                                              :procedure-call-timeout
+                                              :connection-response-timeout])))
+             :model   (model/multi-register (zipmap ks (repeat 0)))
+             :checker (checker/compose
+                        {:linear   (independent/checker checker/linearizable)
+                         :timeline (independent/checker (timeline/html))
+                         :perf     (checker/perf)})
+             :nemesis (voltdb/general-nemesis)
+             :concurrency 100
+             :generator (->> (independent/concurrent-generator
+                               10
+                               (range)
+                               (fn [id]
+                                 (->> (txn-gen ks)
+                                      (gen/reserve 5 (read-only-txn-gen ks))
+                                      (gen/stagger 1)
+                                      (gen/time-limit 30))))
+                             (voltdb/general-gen opts))))))

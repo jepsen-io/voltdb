@@ -8,7 +8,8 @@
                     [independent  :as independent]
                     [nemesis      :as nemesis]
                     [net          :as net]
-                    [tests        :as tests]]
+                    [tests        :as tests]
+                    [util         :as util]]
             [jepsen.os            :as os]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
@@ -17,6 +18,7 @@
             [clojure.string       :as str]
             [clojure.java.io      :as io]
             [clojure.java.shell   :refer [sh]]
+            [clojure.pprint :refer [pprint]]
             [clojure.tools.logging :refer [info warn]])
   (:import (org.voltdb VoltTable
                        VoltType
@@ -24,7 +26,8 @@
            (org.voltdb.client Client
                               ClientConfig
                               ClientFactory
-                              ClientResponse)))
+                              ClientResponse
+                              ProcedureCallback)))
 
 (def username "voltdb")
 (def base-dir "/opt/voltdb")
@@ -55,7 +58,11 @@
                   :kfactor (:k-factor test (dec (count (:nodes test))))}]
        [:paths {}
         [:voltdbroot {:path base-dir}]]
-       [:heartbeat {:timeout 5}] ; seconds
+       ; We need to choose a heartbeat high enough so that we can spam
+       ; isolated nodes with requests *before* they kill themselves
+       ; but low enough that a new majority is elected and performs
+       ; some operations.
+       [:heartbeat {:timeout 1}] ; seconds
        [:commandlog {:enabled true, :synchronous true, :logsize 128}
         [:frequency {:time 2}]]]))) ; milliseconds
 
@@ -139,7 +146,7 @@
 (defn recover!
   "Recovers an entire cluster, or with a node, a single node."
   ([test]
-   (jepsen.core/on-nodes test recover!))
+   (c/on-nodes test recover!))
   ([test node]
    (info "recovering" node)
    (start-daemon! test :recover (jepsen/primary test))
@@ -164,8 +171,8 @@
   "Stops all nodes, then recovers all nodes. Useful when Volt's lost majority
   and nodes kill themselves."
   ([test]
-   (jepsen.core/on-nodes test stop!)
-   (jepsen.core/on-nodes test recover!)))
+   (c/on-nodes test stop!)
+   (c/on-nodes test recover!)))
 
 (defn sql-cmd!
   "Takes an SQL query and runs it on the local node via sqlcmd"
@@ -264,16 +271,17 @@
 (defn connect
   "Opens a connection to the given node and returns a voltdb client. Options:
 
+      :reconnect?
       :procedure-call-timeout
       :connection-response-timeout"
   ([node]
    (connect node {}))
   ([node opts]
-   (let [opts (merge {:procedure-call-timeout 1000
+   (let [opts (merge {:procedure-call-timeout 100
                       :connection-response-timeout 1000}
                      opts)]
      (-> (doto (ClientConfig. "" "")
-           (.setReconnectOnConnectionLoss true)
+           (.setReconnectOnConnectionLoss (get opts :reconnect? true))
            (.setProcedureCallTimeout (:procedure-call-timeout opts))
            (.setConnectionResponseTimeout (:connection-response-timeout opts)))
          (ClientFactory/createClient)
@@ -326,6 +334,22 @@
     (assert (= (.getStatus res) ClientResponse/SUCCESS))
     (map volt-table->map (.getResults res))))
 
+(defn async-call!
+  "Call a stored procedure asynchronously. Returns a promise of a seq of
+  VoltTable results. If a final fn is given, passes ClientResponse to that fn."
+  [^Client client procedure & args]
+  (let [p (promise)]
+    (.callProcedure client
+                    (reify ProcedureCallback
+                      (clientCallback [this res]
+                        (when (fn? (last args))
+                          ((last args) res))
+                        (deliver p (map volt-table->map (.getResults res)))))
+                    procedure
+                    (into-array Object (if (fn? (last args))
+                                         (butlast args)
+                                         args)))))
+
 (defn ad-hoc!
   "Run an ad-hoc SQL stored procedure."
   [client & args]
@@ -333,30 +357,51 @@
 
 ;; Nemeses
 
-(defn isolated-killer-nemesis
-  "A nemesis which partitions away single nodes, then kills them. On :stop,
-  rejoins the dead nodes."
+(defn killer-nemesis
+  "A nemesis which kills the given collection of nodes on :start, and rejoins
+  them on :stop."
   []
-  (nemesis/node-start-stopper
-    #(take (rand-int (/ 2 (count %))) (shuffle %))
-    (fn [test node]
-      ; Isolate this node
-      (nemesis/partition! test
-                          (nemesis/complete-grudge
-                            [[node] (remove #{node} (:nodes test))]))
-      (info "Partitioned away" node)
-      (Thread/sleep 5000)
-      (stop! test node)
-      :killed)
-    (fn [test node]
+  (reify client/Client
+    (setup! [this test _] this)
+
+    (invoke! [this test op]
+      (case (:f op)
+        :start (do (dorun (util/real-pmap (partial stop! test) (:value op)))
+                   [:killed (:value op)])
+        :stop  (->> (:value op)
+                    (map (fn [node]
+                           [node (if (up? node)
+                                   :already-up
+                                   (do (rejoin! test node)
+                                       :rejoined))])
+                         (into (sorted-set))))))
+    (teardown! [this test])))
+
+(defn isolator-nemesis
+  "A nemesis which handles :start by isolating the nodes in the op's :value
+  into their own partition, and :stop by healing the network."
+  []
+  (reify client/Client
+    (setup! [this test _]
       (net/heal! (:net test) test)
-      (info "Network healed")
-      (rejoin! test node)
-      :rejoined)))
+      this)
+
+    (invoke! [this test op]
+      (case (:f op)
+        :start (let [grudge (nemesis/complete-grudge
+                              [(:value op)
+                               (remove (set (:value op)) (:nodes test))])]
+                 (nemesis/partition! test grudge)
+                 (assoc op :value [:partitioned grudge]))
+        :stop (do (net/heal! (:net test) test)
+                  (assoc op :value :fully-connected))))
+
+    (teardown! [this test]
+      (net/heal! (:net test) test))))
 
 (defn recover-nemesis
-  "A nemesis which responds to :recover ops by killing and recovering all nodes
-  in the test."
+  "A nemesis which responds to :recover ops by healing the network, killing and
+  recovering all nodes in the test."
   []
   (reify client/Client
     (setup! [this test _] this)
@@ -364,18 +409,80 @@
     (invoke! [this test op]
       (assoc op :type :info, :value
              (case (:f op)
-               :recover (do (stop-recover! test)
+               :recover (do (net/heal! (:net test) test)
+                            (stop-recover! test)
                             [:recovered (:nodes test)]))))
 
     (teardown! [this test])))
 
-(defn with-recover-nemesis
-  "Merges a recovery nemesis into another nemesis, handling :recover ops by
-  killing and recovering the cluster, and all others passed through to the
-  given nemesis."
-  [nem]
-  (nemesis/compose {#{:recover}                 (recover-nemesis)
-                    #(when (not= :recover %) %) nem}))
+(defn rando-nemesis
+  "Confuses VoltDB by spewing random writes into an unrelated table, on one of
+  the nodes in (:value op)"
+  ([]
+   (let [initialized? (promise)
+         writes       (atom 0)]
+     (reify client/Client
+       (setup! [this test _]
+         (let [node (first (:nodes test))
+               conn (connect node {})]
+           (when (deliver initialized? true)
+             (try
+               (c/on node
+                     ; Create table
+                     (sql-cmd! "CREATE TABLE mentions (
+                                 well     INTEGER NOT NULL,
+                                 actually INTEGER NOT NULL
+                               );")
+                     (info node "mentions table created"))
+               (finally
+                 (close! conn)))))
+         this)
+
+       (invoke! [this test op]
+         (assert (= :rando (:f op)))
+         (let [conn (connect (first (:value op))
+                             {:procedure-call-timeout 100
+                              :reconnect? false})]
+           (future
+             (try
+               (dotimes [i 100000]
+;                 (call! conn "MENTIONS.insert" i (rand-int 1000)))
+                 (Thread/sleep 1)
+                 (async-call!
+                   conn "MENTIONS.insert" i (rand-int 1000)
+                   (fn [^ClientResponse res]
+                     (when (or (= ClientResponse/SUCCESS (.getStatus res))
+                               ; not sure why this happens but it's ok?
+                               (= ClientResponse/UNINITIALIZED_APP_STATUS_CODE
+                                  (.getStatus res)))
+                       (->> res
+                            .getResults
+                            (map volt-table->map)
+                            first
+                            :rows
+                            first
+                            :modified_tuples
+                            (swap! writes +))))))
+               (catch Exception e
+                 (info "Rando nemesis finished with" (.getMessage e)))
+               (finally
+                 (info "Rando nemesis finished writing")
+                 (close! conn))))
+           (assoc op :value @writes)))
+
+       (teardown! [this test])))))
+
+(defn general-nemesis
+  "Performs kill/recover recovery, network partitions,
+  isolated+kill/rejoins, and random operations."
+  []
+  (nemesis/compose
+    {#{:recover}        (recover-nemesis)
+     #{:rando}          (rando-nemesis)
+     {:isolate :start
+      :heal    :stop}   (isolator-nemesis)
+     {:kill    :start
+      :rejoin  :stop}   (killer-nemesis)}))
 
 ;; Generators
 
@@ -389,26 +496,59 @@
                                 {:type :info, :f :stop}]))
                gen))
 
-(defn start-stop-recover-gen
-  "Generator for a nemesis which starts, stops, and recovers. Wraps a client
-  gen."
-  [gen]
-  (gen/nemesis
-    (gen/phases
-      (gen/sleep 10)
-      (gen/seq (cycle [{:type :info :f :start}
-                       {:type :info :f :stop}
-                       (gen/sleep 10)
-                       {:type :info :f :recover}
-                       (gen/sleep 10)])))
-    gen))
+(defn rando-gen
+  "Emits rando operations on random nodes."
+  [test process]
+  (when-let [up (seq (filter up? (:nodes test)))]
+    {:type  :info
+     :f     :rando
+     :value (rand-nth up)}))
+
+(defn random-minority
+  "A random minority subset of a collection, at least one member."
+  [coll]
+  (-> coll
+      count
+      (/ 2)
+      Math/ceil
+      dec
+      rand-int
+      inc
+      (take (shuffle coll))))
+
+(defn isolate-thirst-kill-gen
+  "Isolates a minority set of nodes, spams them with random operations, then
+  performs global recovery."
+  []
+  (let [state      (atom {:type :info, :f :recover, :value nil})
+        transition (fn [s test]
+                     (case (:f s)
+                       :recover (assoc s :f :rando
+                                         :value (random-minority (:nodes test)))
+                       :rando   (assoc s :f :isolate)
+                       :isolate (assoc s :f :recover, :value nil)))]
+    (reify gen/Generator
+      (op [_ test process]
+        (swap! state transition test)))))
+
+(defn general-gen
+  "Emits a random mixture of partitions, node failures/rejoins, and recoveries,
+  for (:time-limit test) seconds. Allocates one process as a rando. Wraps an
+  underlying client generator."
+  [opts gen]
+  (->> gen
+       (gen/nemesis
+         (gen/phases
+           (gen/sleep 5)
+           (isolate-thirst-kill-gen)))
+       (gen/time-limit (:time-limit opts))))
 
 (defn final-recovery
   "A generator which emits a :stop, followed by a :recover, for the nemesis,
   then sleeps to allow clients to reconnect."
   []
   (gen/phases
-    (gen/nemesis (gen/once {:type :info :f :stop}))
+    (gen/nemesis (gen/once {:type :info :f :heal}))
     (gen/log "Recovering cluster")
     (gen/nemesis
       (gen/once {:type :info, :f :recover}))
@@ -423,8 +563,7 @@
         :force-download?              Always download tarball URL
         :nodes                        Nodes to run against"
   [opts]
-  (merge tests/noop-test
-         opts
-         {:name "voltdb"
-          :os   (if (:skip-os? opts) os/noop debian/os)
-          :db   (db (:tarball opts) (:force-download? opts))}))
+  (-> tests/noop-test
+      (assoc :os (if (:skip-os? opts) os/noop debian/os))
+      (assoc :db (db (:tarball opts) (:force-download? opts)))
+      (merge opts)))
