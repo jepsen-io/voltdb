@@ -5,6 +5,7 @@
             [clojure.tools.cli :as cli]
             [clojure.tools.logging :refer :all]
             [clojure.string :as str]
+            [clojure.java.io :as io]
             [jepsen.core :as jepsen]
             [jepsen.voltdb :as voltdb]
             [jepsen.voltdb [dirty-read :as dirty-read]
@@ -148,10 +149,19 @@ Test names: " (str/join ", " (keys tests))
         (dorun (map println errors))
         (System/exit 254))
 
-      (info "Test options:\n" (with-out-str (pprint options)))
+      (println "Test options:\n" (with-out-str (pprint options)))
 
       ; Run test
       (dotimes [i (:test-count options)]
+        ; Move jepsen.log to subdirectory for last test
+        (let [f  (io/file "jepsen.log")
+              f2 (io/file "store/latest/jepsen.log")]
+          (when (and (.exists f) (not (.exists f2)))
+            ; Can't just rename because log4j retains the filehandle
+            (io/copy f f2)
+            (spit f "" :append false)))
+
+        ; Run test!
         (when-not (:valid? (:results (jepsen/run! (test-fn options))))
           (System/exit 1)))
 
