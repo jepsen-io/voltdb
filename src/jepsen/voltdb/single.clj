@@ -25,8 +25,8 @@
       :strong-reads?                 Whether to perform normal or strong selects
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
-  ([opts] (client nil opts))
-  ([conn opts]
+  ([opts] (client nil nil opts))
+  ([conn node opts]
    (let [initialized? (promise)]
      (reify client/Client
        (setup! [_ test node]
@@ -57,9 +57,10 @@
                (catch RuntimeException e
                  (voltdb/close! conn)
                  (throw e))))
-           (client conn opts)))
+           (client conn node opts)))
 
        (invoke! [this test op]
+         (info "Process " (:process op) "using node" node)
          (try
            (let [id     (key (:value op))
                  value  (val (:value op))]
