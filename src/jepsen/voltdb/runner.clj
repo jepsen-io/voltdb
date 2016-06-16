@@ -120,6 +120,15 @@ Test names: " (str/join ", " (keys tests))
           m
           replacements))
 
+(defn move-logfile!
+  "Moves jepsen.log to store/latest/"
+  []
+  (let [f  (io/file "jepsen.log")
+        f2 (io/file "store/latest/jepsen.log")]
+    (when (and (.exists f) (not (.exists f2)))
+      ; Can't just rename because log4j retains the filehandle
+      (io/copy f f2)
+      (spit f "" :append false))))
 
 (defn -main
   [& args]
@@ -153,18 +162,13 @@ Test names: " (str/join ", " (keys tests))
 
       ; Run test
       (dotimes [i (:test-count options)]
-        ; Move jepsen.log to subdirectory for last test
-        (let [f  (io/file "jepsen.log")
-              f2 (io/file "store/latest/jepsen.log")]
-          (when (and (.exists f) (not (.exists f2)))
-            ; Can't just rename because log4j retains the filehandle
-            (io/copy f f2)
-            (spit f "" :append false)))
-
+        (move-logfile!)
         ; Run test!
         (when-not (:valid? (:results (jepsen/run! (test-fn options))))
+          (move-logfile!)
           (System/exit 1)))
 
+      (move-logfile!)
       (System/exit 0))
     (catch Throwable t
       (fatal t "Oh jeez, I'm sorry, Jepsen broke. Here's why:")
