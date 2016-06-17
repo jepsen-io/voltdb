@@ -160,13 +160,16 @@ Test names: " (str/join ", " (keys tests))
 
       (println "Test options:\n" (with-out-str (pprint options)))
 
-      ; Run test
       (dotimes [i (:test-count options)]
         (move-logfile!)
         ; Run test!
-        (when-not (:valid? (:results (jepsen/run! (test-fn options))))
-          (move-logfile!)
-          (System/exit 1)))
+        (try
+          (when-not (:valid? (:results (jepsen/run! (test-fn options))))
+            (move-logfile!)
+            (System/exit 1))
+          (catch com.jcraft.jsch.JSchException e
+            (info e "SSH connection fault; aborting test and moving on")
+            (move-logfile!))))
 
       (move-logfile!)
       (System/exit 0))
