@@ -55,7 +55,8 @@
     (xml/sexp-as-element
       [:deployment {}
        [:cluster {:hostcount (count (:nodes test))
-                  :kfactor (:k-factor test (dec (count (:nodes test))))}]
+;                  :sitesperhost 2
+                  :kfactor (min 4 (dec (count (:nodes test))))}]
        [:paths {}
         [:voltdbroot {:path base-dir}]]
        ; We need to choose a heartbeat high enough so that we can spam

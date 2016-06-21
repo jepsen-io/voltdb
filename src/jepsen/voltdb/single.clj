@@ -119,7 +119,7 @@
       :strong-reads?                Whether to perform normal or strong selects
       :no-reads?                    Don't bother with reads at all
       :procedure-call-timeout       How long in ms to wait for proc calls
-  :connection-response-timeout  How long in ms to wait for connections"
+      :connection-response-timeout  How long in ms to wait for connections"
   [opts]
   (voltdb/base-test
     (assoc opts
