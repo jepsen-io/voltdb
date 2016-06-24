@@ -63,6 +63,14 @@
 
    [nil "--force-download" "Always download HTTP/S tarballs"]
 
+   [nil "--username USER" "Username for logins"
+    :default "root"
+    :assoc-fn (fn [m k v] (assoc-in m [:ssh k] v))]
+
+   [nil "--password PASS" "Password for sudo access"
+    :default "root"
+    :assoc-fn (fn [m k v] (assoc-in m [:ssh k] v))]
+
    ["-p" "--procedure-call-timeout MILLISECONDS"
     "How long should we wait before timing out procedure calls?"
     :default 1000
