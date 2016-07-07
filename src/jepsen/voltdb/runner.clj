@@ -132,8 +132,9 @@ Test names: " (str/join ", " (keys tests))
   "Moves jepsen.log to store/latest/"
   []
   (let [f  (io/file "jepsen.log")
-        f2 (io/file "store/latest/jepsen.log")]
-    (when (and (.exists f) (not (.exists f2)))
+        f2 (io/file "store/latest/jepsen.log")
+	d1 (io/file "store/latest")]
+    (when (and (.exists f) (.exists d1) (not (.exists f2)))
       ; Can't just rename because log4j retains the filehandle
       (io/copy f f2)
       (spit f "" :append false))))
@@ -182,5 +183,6 @@ Test names: " (str/join ", " (keys tests))
       (move-logfile!)
       (System/exit 0))
     (catch Throwable t
+      (move-logfile!)
       (fatal t "Oh jeez, I'm sorry, Jepsen broke. Here's why:")
       (System/exit 255))))
