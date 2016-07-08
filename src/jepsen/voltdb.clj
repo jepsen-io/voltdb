@@ -8,6 +8,7 @@
                     [independent  :as independent]
                     [nemesis      :as nemesis]
                     [net          :as net]
+                    [os           :as os]
                     [tests        :as tests]
                     [util         :as util :refer [meh timeout]]]
             [jepsen.os            :as os]
@@ -32,15 +33,25 @@
 (def username "voltdb")
 (def base-dir "/opt/voltdb")
 
+(defn os
+  "Given OS, plus python & jdk8"
+  [os]
+  (reify os/OS
+    (setup! [_ test node]
+      (os/setup! os test node)
+      (debian/install ["python2.7"])
+      (c/exec :update-alternatives :--install "/usr/bin/python" "python"
+              "/usr/bin/python2.7" 1)
+      (debian/install-jdk8!)
+      (info "JDK8 installed"))
+
+    (teardown! [_ test node]
+      (os/teardown! os test node))))
+
 (defn install!
   "Install the given tarball URL"
   [node url force?]
   (c/su
-    (debian/install ["python2.7"])
-    (c/exec :update-alternatives :--install "/usr/bin/python" "python"
-            "/usr/bin/python2.7" 1)
-    (debian/install-jdk8!)
-    (info "JDK8 installed")
     (cu/install-tarball! node url base-dir force?)
     (c/exec :mkdir (str base-dir "/log"))
     (cu/ensure-user! username)
@@ -578,6 +589,6 @@
         :nodes                        Nodes to run against"
   [opts]
   (-> tests/noop-test
-      (assoc :os (if (:skip-os? opts) os/noop debian/os))
+      (assoc :os (if (:skip-os? opts) os/noop (os debian/os)))
       (assoc :db (db (:tarball opts) (:force-download? opts)))
       (merge opts)))
