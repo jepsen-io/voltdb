@@ -71,6 +71,10 @@
     :default "root"
     :assoc-fn (fn [m k v] (assoc-in m [:ssh k] v))]
 
+   [nil "--no-password" "Don't use a password"
+    :default false
+    :assoc-fn (fn [m k v] (assoc-in m [:ssh :password] nil))]
+
    ["-p" "--procedure-call-timeout MILLISECONDS"
     "How long should we wait before timing out procedure calls?"
     :default 1000
