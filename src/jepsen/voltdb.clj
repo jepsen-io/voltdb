@@ -31,7 +31,7 @@
                               ProcedureCallback)))
 
 (def username "voltdb")
-(def base-dir "/opt/voltdb")
+(def base-dir "/tmp/jepsen-voltdb")
 
 (defn os
   "Given OS, plus python & jdk8"
