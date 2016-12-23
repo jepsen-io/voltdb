@@ -10,7 +10,7 @@
 (deftest a-test
   (loop []
     (when (run (multi-test {:tarball tarball
-                            :procedure-call-timeout 1000
+                            :procedure-call-timeout 5000
                             :time-limit 200}))
       (recur)
     )))
