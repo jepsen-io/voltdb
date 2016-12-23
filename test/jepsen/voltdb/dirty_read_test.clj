@@ -6,7 +6,5 @@
 
 (deftest a-test
   (loop []
-    (when (is (:valid? (:results (jepsen/run! (dirty-read-test {:tarball tarball
-    :procedure-call-timeout 5000}
-)))))
+    (when (is (:valid? (:results (jepsen/run! (dirty-read-test tarball)))))
       (recur))))
