@@ -74,7 +74,7 @@
        ; isolated nodes with requests *before* they kill themselves
        ; but low enough that a new majority is elected and performs
        ; some operations.
-       [:heartbeat {:timeout 10}] ; seconds
+       [:heartbeat {:timeout 2}] ; seconds
        [:commandlog {:enabled true, :synchronous true, :logsize 128}
         [:frequency {:time 2}]]]))) ; milliseconds
 
