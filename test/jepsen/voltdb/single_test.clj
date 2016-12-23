@@ -19,7 +19,7 @@
   (loop []
     (when (run (single-test {:tarball tarball
                              :strong-reads? true
-                             :procedure-call-timeout 5000
+                             :procedure-call-timeout 1000
                              :time-limit 50}))
       (recur))))
 
@@ -27,6 +27,6 @@
   (loop []
     (when (run (single-test {:tarball tarball
                              :no-reads? true
-                             :procedure-call-timeout 5000
+                             :procedure-call-timeout 1000
                              :time-limit 50}))
       (recur))))
