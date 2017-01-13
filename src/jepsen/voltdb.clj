@@ -126,8 +126,8 @@
            (c/sudo username
                    (c/cd base-dir
                          ; hack hack hack
-                         (Thread/sleep 5000)
-                         (c/exec :tail :-n 50 :-f "log/volt.log"
+                         (Thread/sleep 7000)
+                         (c/exec :tail :-n 1 :-f "log/volt.log"
                                  | :grep :-m 1 "completed initialization"
                                  | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
                    (info node "initialized"))))
