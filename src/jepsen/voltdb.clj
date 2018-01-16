@@ -32,6 +32,7 @@
 
 (def username "voltdb")
 (def base-dir "/opt/voltdb")
+(def voltroot (str base-dir "/voltdbroot"))
 
 (defn os
   "Given OS, plus python & jdk8"
@@ -54,6 +55,7 @@
   (c/su
     (cu/install-tarball! node url base-dir force?)
     (c/exec :mkdir (str base-dir "/log"))
+    (c/exec :mkdir :-p (str voltroot "/log"))
     (cu/ensure-user! username)
     (c/exec :chown :-R (str username ":" username) base-dir)
 
@@ -113,7 +115,7 @@
 (defn await-initialization
   "Blocks until the logfile reports 'Server completed initialization'."
   [node]
-  (info "Waiting for" node "to initialize")
+  (info "Waiting for" node "to initialize at voltroot:" voltroot)
   (timeout 120000
            (throw (RuntimeException.
                     (str node " failed to initialize in time; STDOUT:\n\n"
@@ -121,23 +123,47 @@
                                       (str base-dir "/log/stdout.log")))
                          "\n\nLOG:\n\n"
                          (meh (c/exec :tail :-n 10
-                                      (str base-dir "/log/volt.log")))
+                                      (str voltroot "/log/volt.log")))
                          "\n\n")))
            (c/sudo username
-                   (c/cd base-dir
+                   (c/cd voltroot
                          ; hack hack hack
+                         (Thread/sleep 3000)
+                         (c/exec :tail :-n 1 :-f "log/volt.log"
+                                 | :grep :-m 1 "Initialized VoltDB root directory"
+                                 | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
+                   (info node "initialized"))))
+
+(defn await-start
+    "Blocks until the logfile reports 'Server completed initialization'."
+  [node]
+  (info "Waiting for" node "to start at voltroot:" voltroot )
+  (timeout 120000
+           (throw (RuntimeException.
+                    (str node " failed to start in time; STDOUT:\n\n"
+                        (meh (c/exec :tail :-n 10
+                                      (str base-dir "/log/stdout.log")))
+                         "\n\nLOG:\n\n"
+                         (meh (c/exec :tail :-n 10
+                                      (str voltroot "/log/volt.log")))
+                         "\n\n")))
+
+           (c/sudo username
+                   (c/cd voltroot
+                         ; hack hack hack
+
                          (Thread/sleep 7000)
                          (c/exec :tail :-n 1 :-f "log/volt.log"
                                  | :grep :-m 1 "completed initialization"
                                  | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
-                   (info node "initialized"))))
 
+                   (info node "started"))))
 (defn await-rejoin
   "Blocks until the logfile reports 'Node rejoin completed'"
   [node]
   (info "Waiting for" node "to rejoin")
   (c/sudo username
-          (c/cd base-dir
+          (c/cd voltroot
                 ; hack hack hack
                 (Thread/sleep 5000)
                 (c/exec :tail :-n 1 :-f "log/volt.log"
@@ -145,6 +171,19 @@
                         | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
           (info node "rejoined")))
 
+(defn init-daemon!
+  "Starts the daemon with the given command."
+  [test cmd host]
+  (c/sudo username
+          (c/cd voltroot
+                (cu/start-daemon! {:logfile (str base-dir "/log/stdout.log")
+                                   :pidfile (str base-dir "/pidfile")
+                                   :chdir   base-dir}
+                                  (str base-dir "/bin/voltdb")
+                                  (str "init")
+                                  :--config (str base-dir "/deployment.xml")
+                                  :--force
+                                  :--dir (str base-dir) ))))
 (defn start-daemon!
   "Starts the daemon with the given command."
   [test cmd host]
@@ -154,15 +193,18 @@
                                    :pidfile (str base-dir "/pidfile")
                                    :chdir   base-dir}
                                   (str base-dir "/bin/voltdb")
-                                  cmd
-                                  :--deployment (str base-dir "/deployment.xml")
+                                  (str "start")
+                                  :--dir (str base-dir)
+                                  :--count (count (:nodes test))
                                   :--host host))))
 
 (defn start!
   "Starts voltdb, creating a fresh DB"
   [test node]
-  (start-daemon! test :create (jepsen/primary test))
-  (await-initialization node))
+  (init-daemon! test :init (jepsen/primary test))
+  (await-initialization node)
+  (start-daemon! test :start (jepsen/primary test))
+  (await-start node))
 
 (defn recover!
   "Recovers an entire cluster, or with a node, a single node."
@@ -286,7 +328,7 @@
     db/LogFiles
     (log-files [db test node]
       [(str base-dir "/log/stdout.log")
-       (str base-dir "/log/volt.log")])))
+       (str voltroot "/log/volt.log")])))
 
 
 (defn connect
