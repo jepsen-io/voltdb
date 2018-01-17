@@ -165,7 +165,7 @@
   (c/sudo username
           (c/cd voltroot
                 ; hack hack hack
-                (Thread/sleep 5000)
+                (Thread/sleep 12000)
                 (c/exec :tail :-n 1 :-f "log/volt.log"
                         | :grep :-m 1 "Node rejoin completed"
                         | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
