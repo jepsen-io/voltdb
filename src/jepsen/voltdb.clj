@@ -82,7 +82,7 @@
 
 (defn init-voltdb!
   "Starts the daemon with the given command."
-  [test host]
+  [host]
   (info host "initializing voltdbroot")
   (c/sudo username
           (c/cd voltroot
