@@ -361,11 +361,14 @@
    (connect node {}))
   ([node opts]
    (let [opts (merge {:procedure-call-timeout 100
-                      :connection-response-timeout 1000}
+                      :connection-response-timeout 1000
+                      :topologychangeaware true}
                      opts)]
      (-> (doto (ClientConfig. "" "")
            (.setReconnectOnConnectionLoss (get opts :reconnect? true))
            (.setProcedureCallTimeout (:procedure-call-timeout opts))
+           (.setClientAffinity true)
+           (.setTopologyChangeAware true)
            (.setConnectionResponseTimeout (:connection-response-timeout opts)))
          (ClientFactory/createClient)
          (doto
