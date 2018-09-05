@@ -114,7 +114,7 @@
   "Blocks until the logfile reports 'Server completed initialization'."
   [node]
   (info "Waiting for" node "to initialize")
-  (timeout 120000
+  (timeout 300000
            (throw (RuntimeException.
                     (str node " failed to initialize in time; STDOUT:\n\n"
                          (meh (c/exec :tail :-n 10
@@ -126,7 +126,7 @@
            (c/sudo username
                    (c/cd base-dir
                          ; hack hack hack
-                         (Thread/sleep 5000)
+                         (Thread/sleep 10000)
                          (c/exec :tail :-n 2 :-f "log/volt.log"
                                  | :grep :-m 1 "completed initialization"
                                  | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
