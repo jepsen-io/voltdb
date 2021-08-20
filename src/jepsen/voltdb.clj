@@ -59,6 +59,7 @@
 
     (info "VoltDB unpacked")))
 
+
 (defn deployment-xml
   "Generate a deployment.xml string for the given test."
   [test]
@@ -78,12 +79,34 @@
        [:commandlog {:enabled true, :synchronous true, :logsize 128}
         [:frequency {:time 2}]]]))) ; milliseconds
 
+(defn init-db!
+  "run voltdb init"
+  [node]
+  (info "Initializing " node " voltdb")
+  (c/sudo username
+        (c/cd base-dir
+              (c/exec (str base-dir "/bin/voltdb") :init
+              :--config (str base-dir "/deployment.xml")
+              | :tee (str base-dir "/log/stdout.log")
+              )
+        )
+  )
+  (info node " initialized")
+)
+
 (defn configure!
   "Prepares config files and creates fresh DB."
   [test node]
   (c/sudo username
         (c/cd base-dir
-              (c/exec :echo (deployment-xml test) :> "deployment.xml"))))
+              (c/exec :echo (deployment-xml test) :> "deployment.xml")))
+  (init-db! node)
+  (c/sudo username
+        (c/cd base-dir
+              (c/exec :ln :-f :-s (str base-dir "/voltdbroot/log/volt.log") (str base-dir "/log/volt.log" ))
+        )
+  )
+)
 
 (defn close!
   "Calls c.close"
@@ -110,11 +133,11 @@
   [test]
   (remove nil? (pmap up? (:nodes test))))
 
-(defn await-initialization
+(defn await-start
   "Blocks until the logfile reports 'Server completed initialization'."
   [node]
-  (info "Waiting for" node "to initialize")
-  (timeout 300000
+  (info "Waiting for" node "to start")
+  (timeout 250000
            (throw (RuntimeException.
                     (str node " failed to initialize in time; STDOUT:\n\n"
                          (meh (c/exec :tail :-n 10
@@ -126,11 +149,11 @@
            (c/sudo username
                    (c/cd base-dir
                          ; hack hack hack
-                         (Thread/sleep 10000)
-                         (c/exec :tail :-n 2 :-f "log/volt.log"
+                         (Thread/sleep 240000)
+                         (c/exec :tail :-n 10 :-f "log/volt.log"
                                  | :grep :-m 1 "completed initialization"
                                  | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
-                   (info node "initialized"))))
+                   (info node "started"))))
 
 (defn await-rejoin
   "Blocks until the logfile reports 'Node rejoin completed'"
@@ -140,7 +163,7 @@
           (c/cd base-dir
                 ; hack hack hack
                 (Thread/sleep 5000)
-                (c/exec :tail :-n 1 :-f "log/volt.log"
+                (c/exec :tail :-n 10 :-f "log/volt.log"
                         | :grep :-m 1 "Node rejoin completed"
                         | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
           (info node "rejoined")))
@@ -155,14 +178,18 @@
                                    :chdir   base-dir}
                                   (str base-dir "/bin/voltdb")
                                   cmd
-                                  :--deployment (str base-dir "/deployment.xml")
-                                  :--host host))))
+                                  :--count (str 5)
+                                  :--host (str "n1,n2,n3,n4,n5")
+                )
+            )
+  )
+)
 
 (defn start!
   "Starts voltdb, creating a fresh DB"
   [test node]
-  (start-daemon! test :create (jepsen/primary test))
-  (await-initialization node))
+  (start-daemon! test :start (jepsen/primary test))
+  (await-start node))
 
 (defn recover!
   "Recovers an entire cluster, or with a node, a single node."
@@ -170,8 +197,8 @@
    (c/on-nodes test recover!))
   ([test node]
    (info "recovering" node)
-   (start-daemon! test :recover (jepsen/primary test))
-   (await-initialization node)))
+   (start-daemon! test :start (jepsen/primary test))
+   (await-start node)))
 
 (defn rejoin!
   "Rejoins a voltdb node. Serialized to work around a bug in voltdb where
@@ -179,7 +206,7 @@
   [test node]
   (locking rejoin!
     (info "rejoining" node)
-    (start-daemon! test :rejoin (rand-nth (up-nodes test)))
+    (start-daemon! test :start (rand-nth (up-nodes test)))
     (await-rejoin node)))
 
 (defn stop!
