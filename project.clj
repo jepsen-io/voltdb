@@ -5,7 +5,7 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/tools.cli "0.3.3"]
-                 [jepsen "0.1.7"]
+                 [jepsen "0.1.6"]
                  [org.clojure/data.xml "0.0.8"]
                  [org.voltdb/voltdbclient "6.2"]]
   :jvm-opts ["-Xmx8g"
