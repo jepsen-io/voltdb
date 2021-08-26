@@ -140,17 +140,17 @@
   (timeout 250000
            (throw (RuntimeException.
                     (str node " failed to initialize in time; STDOUT:\n\n"
-                         (meh (c/exec :tail :-n 10
+                         (meh (c/exec :tail :-n 20
                                       (str base-dir "/log/stdout.log")))
                          "\n\nLOG:\n\n"
-                         (meh (c/exec :tail :-n 10
+                         (meh (c/exec :tail :-n 20
                                       (str base-dir "/log/volt.log")))
                          "\n\n")))
            (c/sudo username
                    (c/cd base-dir
                          ; hack hack hack
                          (Thread/sleep 240000)
-                         (c/exec :tail :-n 10 :-f "log/volt.log"
+                         (c/exec :tail :-n 20 :-f "log/volt.log"
                                  | :grep :-m 1 "completed initialization"
                                  | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
                    (info node "started"))))
@@ -163,7 +163,7 @@
           (c/cd base-dir
                 ; hack hack hack
                 (Thread/sleep 5000)
-                (c/exec :tail :-n 10 :-f "log/volt.log"
+                (c/exec :tail :-n 20 :-f "log/volt.log"
                         | :grep :-m 1 "Node rejoin completed"
                         | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
           (info node "rejoined")))
