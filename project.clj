@@ -9,13 +9,7 @@
                  [org.clojure/data.xml "0.0.8"]
                  [org.voltdb/voltdbclient "6.2"]]
   :jvm-opts ["-Xmx8g"
-             "-XX:+UseConcMarkSweepGC"
-             "-XX:+UseParNewGC"
-             "-XX:+CMSParallelRemarkEnabled"
-             "-XX:+AggressiveOpts"
-             "-XX:+UseFastAccessorMethods"
              "-XX:MaxInlineLevel=32"
-             "-XX:MaxRecursiveInlineLevel=2"
              "-server"]
   :main jepsen.voltdb.runner
   :aot  [jepsen.voltdb.runner
