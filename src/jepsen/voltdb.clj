@@ -52,7 +52,7 @@
   "Install the given tarball URL"
   [node url force?]
   (c/su
-    (cu/install-tarball! node url base-dir force?)
+    (cu/install-archive! node url base-dir force?)
     (c/exec :mkdir (str base-dir "/log"))
     (cu/ensure-user! username)
     (c/exec :chown :-R (str username ":" username) base-dir)
@@ -408,8 +408,8 @@
   "A nemesis which kills the given collection of nodes on :start, and rejoins
   them on :stop."
   []
-  (reify client/Client
-    (setup! [this test _] this)
+  (reify nemesis/Nemesis
+    (setup! [this test] this)
 
     (invoke! [this test op]
       (case (:f op)
@@ -428,8 +428,8 @@
   "A nemesis which handles :start by isolating the nodes in the op's :value
   into their own partition, and :stop by healing the network."
   []
-  (reify client/Client
-    (setup! [this test _]
+  (reify nemesis/Nemesis
+    (setup! [this test]
       (net/heal! (:net test) test)
       this)
 
@@ -450,8 +450,8 @@
   "A nemesis which responds to :recover ops by healing the network, killing and
   recovering all nodes in the test."
   []
-  (reify client/Client
-    (setup! [this test _] this)
+  (reify nemesis/Nemesis
+    (setup! [this test] this)
 
     (invoke! [this test op]
       (assoc op :type :info, :value
@@ -468,8 +468,8 @@
   ([]
    (let [initialized? (promise)
          writes       (atom 0)]
-     (reify client/Client
-       (setup! [this test _]
+     (reify nemesis/Nemesis
+       (setup! [this test]
          (let [node (first (:nodes test))
                conn (connect node {})]
            (when (deliver initialized? true)
