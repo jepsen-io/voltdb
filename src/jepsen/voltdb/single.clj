@@ -29,35 +29,37 @@
   ([conn node opts]
    (let [initialized? (promise)]
      (reify client/Client
-       (setup! [_ test node]
+       (open! [_ test node]
          (let [conn (voltdb/connect
                       node (select-keys opts
                                         [:procedure-call-timeout
                                          :connection-response-timeout]))]
-           (when (deliver initialized? true)
-             (try
-               (c/on node
-                     ; Create table
-                     (voltdb/sql-cmd! "CREATE TABLE registers (
-                                      id          INTEGER UNIQUE NOT NULL,
-                                      value       INTEGER NOT NULL,
-                                      PRIMARY KEY (id)
-                                      );
-                                      PARTITION TABLE registers ON COLUMN id;")
-                     (voltdb/sql-cmd! "CREATE PROCEDURE registers_cas
-                                      PARTITION ON TABLE registers COLUMN id
-                                      AS
-                                      UPDATE registers SET value = ?
-                                      WHERE id = ? AND value = ?;")
-                     (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
-                                      jepsen.procedures.SRegisterStrongRead;")
-                     (voltdb/sql-cmd! "PARTITION PROCEDURE SRegisterStrongRead
-                                      ON TABLE registers COLUMN id;")
-                     (info node "table created"))
-               (catch RuntimeException e
-                 (voltdb/close! conn)
-                 (throw e))))
            (client conn node opts)))
+
+       (setup! [_ test]
+         (when (deliver initialized? true)
+           (try
+             (c/on node
+                   ; Create table
+                   (voltdb/sql-cmd! "CREATE TABLE registers (
+                                    id          INTEGER UNIQUE NOT NULL,
+                                    value       INTEGER NOT NULL,
+                                    PRIMARY KEY (id)
+                                    );
+                                    PARTITION TABLE registers ON COLUMN id;")
+                   (voltdb/sql-cmd! "CREATE PROCEDURE registers_cas
+                                    PARTITION ON TABLE registers COLUMN id
+                                    AS
+                                    UPDATE registers SET value = ?
+                                    WHERE id = ? AND value = ?;")
+                   (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
+                                    jepsen.procedures.SRegisterStrongRead;")
+                   (voltdb/sql-cmd! "PARTITION PROCEDURE SRegisterStrongRead
+                                    ON TABLE registers COLUMN id;")
+                   (info node "table created"))
+             (catch RuntimeException e
+               (voltdb/close! conn)
+               (throw e)))))
 
        (invoke! [this test op]
          (info "Process " (:process op) "using node" node)
@@ -105,7 +107,9 @@
 
                  (throw e))))))
 
-       (teardown! [_ test]
+       (teardown! [_ test])
+
+       (close! [_ test]
          (voltdb/close! conn))))))
 
 (defn r   [_ _] {:type :invoke, :f :read, :value nil})

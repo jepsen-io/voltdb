@@ -34,24 +34,26 @@
   ([opts node conn]
    (let [initialized? (promise)]
      (reify client/Client
-       (setup! [_ test node]
+       (open! [_ test node]
          (let [conn (voltdb/connect
                       node
                       (select-keys opts
                                    [:procedure-call-timeout
                                     :connection-response-timeout]))]
-           (c/on node
-                 (when (deliver initialized? true)
-                   ; Create table
-                   (voltdb/sql-cmd! "CREATE TABLE dirty_reads (
-                                      id          INTEGER NOT NULL,
-                                      PRIMARY KEY (id)
-                                    );
-                                    PARTITION TABLE dirty_reads ON COLUMN id;")
-                   (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
-                                    jepsen.procedures.DirtyReadStrongRead;")
-                   (info node "table created")))
            (client opts node conn)))
+
+       (setup! [_ test]
+         (c/on node
+               (when (deliver initialized? true)
+                 ; Create table
+                 (voltdb/sql-cmd! "CREATE TABLE dirty_reads (
+                                  id          INTEGER NOT NULL,
+                                  PRIMARY KEY (id)
+                                  );
+                                  PARTITION TABLE dirty_reads ON COLUMN id;")
+                 (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
+                                  jepsen.procedures.DirtyReadStrongRead;")
+                 (info node "table created"))))
 
        (invoke! [this test op]
          (try
@@ -87,7 +89,9 @@
            (catch org.voltdb.client.ProcCallException e
              (assoc op :type :info, :error (.getMessage e)))))
 
-       (teardown! [_ test]
+       (teardown! [_ test])
+
+       (close! [_ test]
          (voltdb/close! conn))))))
 
 (defn checker
@@ -97,7 +101,7 @@
   Also verifies that every successful write is present in the strong read set."
   []
   (reify checker/Checker
-    (check [checker test model history opts]
+    (check [checker test history opts]
       (let [ok    (filter op/ok? history)
             writes (->> ok
                         (filter #(= :write (:f %)))

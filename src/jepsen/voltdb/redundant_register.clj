@@ -20,9 +20,12 @@
 (defn client
   "A client which implements a register, identified by a key. The register is
   stored in n copies, all of which should agree."
-  [n conn]
+  [n node conn]
   (let [initialized? (promise)]
     (reify client/Client
+      (open! [_ test node]
+        (client n node (voltdb/connect node)))
+
       (setup! [_ test node]
         (c/on node
               (when (deliver initialized? true)
@@ -34,8 +37,7 @@
                                     PRIMARY KEY   (id, copy)
                                   );
                                   PARTITION TABLE rregisters ON COLUMN copy;")
-                (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS jepsen.procedures.RRegisterUpsert;")))
-        (client n (voltdb/connect node)))
+                (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS jepsen.procedures.RRegisterUpsert;"))))
 
       (invoke! [this test op]
         (let [id    (key (:value op))
@@ -63,7 +65,7 @@
   "Verifies that every read shows n identical values for all copies."
   [n]
   (reify checker/Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       (let [mixed-reads (->> history
                              (r/filter (fn [op]
                                          (let [vs (:value op)]

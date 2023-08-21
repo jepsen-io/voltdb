@@ -59,7 +59,6 @@
 
     (info "VoltDB unpacked")))
 
-
 (defn deployment-xml
   "Generate a deployment.xml string for the given test."
   [test]
@@ -618,4 +617,4 @@
   (-> tests/noop-test
       (assoc :os (if (:skip-os? opts) os/noop (os debian/os)))
       (assoc :db (db (:tarball opts) (:force-download? opts)))
-      (merge opts)))
+      (merge opts)))https://www.youtube.com/watch?v=UiSB2Fbw9gs

@@ -32,38 +32,40 @@
       :system-count                 How many systems to preallocate
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
-  ([opts] (client nil opts))
-  ([conn opts]
+  ([opts] (client nil opts nil))
+  ([node opts conn]
    (let [initialized? (promise)]
      (reify client/Client
-       (setup! [_ test node]
+       (open! [_ test node]
          (let [conn (voltdb/connect
                       node (select-keys opts
                                         [:procedure-call-timeout
                                          :connection-response-timeout]))]
-           (when (deliver initialized? true)
-             (try
-               (c/on node
-                     ; Create table
-                     (voltdb/sql-cmd! "CREATE TABLE multi (
-                                      system      INTEGER NOT NULL,
-                                      key         VARCHAR NOT NULL,
-                                      value       INTEGER NOT NULL,
-                                      PRIMARY KEY (system, key)
-                                      );
-                                      PARTITION TABLE multi ON COLUMN key;")
-                     (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
-                                      jepsen.procedures.MultiTxn;")
-                     (info node "table created")
-                     ; Create initial systems
-                     (dotimes [i (:system-count opts)]
-                       (doseq [k (:keys opts)]
-                         (voltdb/call! conn "MULTI.insert" i (name k) 0)))
-                     (info node "initial state populated"))
-               (catch RuntimeException e
-                 (voltdb/close! conn)
-                 (throw e))))
-           (client conn opts)))
+           (client node opts conn)))
+
+       (setup! [_ test]
+         (when (deliver initialized? true)
+           (try
+             (c/on node
+                   ; Create table
+                   (voltdb/sql-cmd! "CREATE TABLE multi (
+                                    system      INTEGER NOT NULL,
+                                    key         VARCHAR NOT NULL,
+                                    value       INTEGER NOT NULL,
+                                    PRIMARY KEY (system, key)
+                                    );
+                                    PARTITION TABLE multi ON COLUMN key;")
+                   (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
+                                    jepsen.procedures.MultiTxn;")
+                   (info node "table created")
+                   ; Create initial systems
+                   (dotimes [i (:system-count opts)]
+                     (doseq [k (:keys opts)]
+                       (voltdb/call! conn "MULTI.insert" i (name k) 0)))
+                   (info node "initial state populated"))
+             (catch RuntimeException e
+               (voltdb/close! conn)
+               (throw e)))))
 
        (invoke! [this test op]
          (try
@@ -109,7 +111,9 @@
 
                  (throw e))))))
 
-       (teardown! [_ test]
+       (teardown! [_ test])
+
+       (close! [_ test]
          (voltdb/close! conn))))))
 
 (defn op
