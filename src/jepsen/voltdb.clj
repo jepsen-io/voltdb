@@ -438,7 +438,7 @@
         :start (let [grudge (nemesis/complete-grudge
                               [(:value op)
                                (remove (set (:value op)) (:nodes test))])]
-                 (nemesis/partition! test grudge)
+                 (net/drop-all! test grudge)
                  (assoc op :value [:partitioned grudge]))
         :stop (do (net/heal! (:net test) test)
                   (assoc op :value :fully-connected))))
