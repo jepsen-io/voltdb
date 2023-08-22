@@ -19,6 +19,7 @@
                     [os           :as os]
                     [util         :as util]
                     [tests        :as tests]]
+            [jepsen.generator.context :as gen.context]
             [jepsen.os.debian     :as debian]
             [jepsen.voltdb        :as voltdb]
             [knossos.model        :as model]
@@ -134,37 +135,36 @@
          :lost-count        (count lost)
          :lost              lost}))))
 
-(defn sr  [_ _] {:type :invoke, :f :strong-read, :value nil})
+(defrecord RWGen
+  [last-write ; The value we wrote last
+   in-flight] ; A vector of in-flight writes on each node; initally nil
+  gen/Generator
+  (update [this test context event]
+    this)
+
+  (op [this test context]
+    (let [; Lazy initialization of in-flight vector once test is ready
+          in-flight (or in-flight (vec (repeat (count (:nodes test)) 0)))
+          ; Pick a free process
+          process (gen.context/some-free-process context)
+          thread  (gen.context/process->thread context process)
+          ; What number node is that?
+          n (mod process (count (:nodes test)))]
+      (if (= thread n)
+        ; The first node-count processes perform writes
+        (let [last-write' (inc last-write)
+              in-flight'  (assoc in-flight n last-write')]
+          [(gen/fill-in-op {:f :write, :value last-write'} context)
+           (RWGen. last-write' in-flight')])
+        ; Remaining processes try to read most recent writes
+        [(gen/fill-in-op {:f :read, :value (nth in-flight n)})
+         this]))))
 
 (defn rw-gen
   "While one process writes to a node, we want another process to see that the
   in-flight write is visible, in the instant before the node crashes."
   []
-  (let [; What did we write last?
-        write (atom -1)
-        ; A vector of in-flight writes on each node.
-        in-flight (atom nil)]
-    (reify gen/Generator
-      (op [_ test process]
-        ; lazy init of in-flight state
-        (when-not @in-flight
-          (compare-and-set! in-flight
-                            nil
-                            (vec (repeat (count (:nodes test)) 0))))
-
-        (let [; thread index
-              t (gen/process->thread test process)
-              ; node index
-              n (mod process (count (:nodes test)))]
-          (if (= t n)
-            ; The first n processes perform writes
-            (let [v (swap! write inc)]
-              ; Record the in-progress write
-              (swap! in-flight assoc n v)
-              {:type :invoke, :f :write, :value v})
-
-            ; Remaining processes try to read the most recent write
-            {:type :invoke, :f :read, :value (nth @in-flight n)}))))))
+  (RWGen. -1 nil))
 
 (defn dirty-read-test
   "Takes an options map. Special options, in addition to voltdb/base-test:
@@ -182,10 +182,10 @@
                       {:dirty-reads (checker)
                        :perf   (checker/perf)})
            :nemesis (voltdb/general-nemesis)
-           :concurrency 15
+           :concurrency 15 ; TODO: this should be scaled with test node count --KRK 2023
            :generator (gen/phases
                         (->> (rw-gen)
                              (gen/stagger 1/100)
                              (voltdb/general-gen opts))
                         (voltdb/final-recovery)
-                        (gen/clients (gen/each (gen/once sr)))))))
+                        (gen/clients (gen/each-thread {:f :strong-read}))))))

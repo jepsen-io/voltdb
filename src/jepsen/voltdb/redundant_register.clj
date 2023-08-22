@@ -102,8 +102,8 @@
                                     (gen/delay 1/100)
                                     (gen/time-limit 30))))
                            (gen/nemesis
-                             (gen/seq (cycle [(gen/sleep 30)
-                                              {:type :info :f :start}
-                                              (gen/sleep 30)
-                                              {:type :info :f :stop}])))
+                             (cycle [(gen/sleep 30)
+                                     {:type :info :f :start}
+                                     (gen/sleep 30)
+                                     {:type :info :f :stop}]))
                            (gen/time-limit 200)))))

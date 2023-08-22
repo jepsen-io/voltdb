@@ -539,10 +539,10 @@
   "A generator for a nemesis with simple partitions: 25 seconds on, 25 seconds
   off. Wraps a client gen."
   [gen]
-  (gen/nemesis (gen/seq (cycle [(gen/sleep 25)
-                                {:type :info, :f :start}
-                                (gen/sleep 25)
-                                {:type :info, :f :stop}]))
+  (gen/nemesis (cycle [(gen/sleep 25)
+                       {:type :info, :f :start}
+                       (gen/sleep 25)
+                       {:type :info, :f :stop}])
                gen))
 
 (defn rando-gen
@@ -569,19 +569,15 @@
   "Isolates a minority set of nodes, spams them with random operations, then
   performs global recovery. Takes a recovery delay in seconds."
   [recovery-delay]
-  (let [state      (atom {:type :info, :f :recover, :value nil})
-        transition (fn [s test]
-                     (case (:f s)
-                       :recover (assoc s :f :rando
-                                         :value (random-minority (:nodes test)))
-                       :rando   (assoc s :f :isolate)
-                       :isolate (assoc s :f :recover, :value nil)))]
-    (reify gen/Generator
-      (op [_ test process]
-        (let [op (swap! state transition test)]
-          (when (and recovery-delay (= :recover (:f op)))
-            (Thread/sleep (* 1000 recovery-delay)))
-          op)))))
+  (fn gen [test ctx]
+    (let [minority (random-minority (:nodes test))]
+      ; TODO: This is what was written in the code, but I think it's actually
+      ; wrong: we want to isolate *then* rando, right? -KRK 2023
+      [{:type :info, :f :rando, :value minority}
+       {:type :info, :f :isolate, :value minority}
+       ; TODO: Is this supposed to sleep before recovery or after? -KRK 2023
+       (gen/sleep (or recovery-delay 0))
+       {:type :info, :f :recover, :value nil}])))
 
 (defn general-gen
   "Emits a random mixture of partitions, node failures/rejoins, and recoveries,
@@ -601,8 +597,7 @@
   []
   (gen/phases
     (gen/log "Recovering cluster")
-    (gen/nemesis
-      (gen/once {:type :info, :f :recover}))
+    (gen/nemesis {:type :info, :f :recover})
     (gen/log "Waiting for reconnects")
     (gen/sleep 10)))
 
@@ -617,4 +612,4 @@
   (-> tests/noop-test
       (assoc :os (if (:skip-os? opts) os/noop (os debian/os)))
       (assoc :db (db (:tarball opts) (:force-download? opts)))
-      (merge opts)))https://www.youtube.com/watch?v=UiSB2Fbw9gs
+      (merge opts)))
