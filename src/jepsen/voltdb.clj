@@ -10,7 +10,7 @@
                     [net          :as net]
                     [os           :as os]
                     [tests        :as tests]
-                    [util         :as util :refer [meh timeout]]]
+                    [util         :as util :refer [await-fn meh timeout]]]
             [jepsen.os            :as os]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
@@ -30,8 +30,15 @@
                               ClientResponse
                               ProcedureCallback)))
 
+(declare connect)
+(declare close!)
+(declare ad-hoc!)
+(declare sql-cmd!)
+(declare call!)
+
 (def username "voltdb")
 (def base-dir "/tmp/jepsen-voltdb")
+(def client-port 21212)
 
 (defn os
   "Given OS, plus python & jdk"
@@ -80,6 +87,7 @@
        ; but low enough that a new majority is elected and performs
        ; some operations.
        [:heartbeat {:timeout 2}] ; seconds
+       ; TODO: consider changing commandlog enabled to false to speed up startup
        [:commandlog {:enabled true, :synchronous true, :logsize 128}
         [:frequency {:time 2}]]]))) ; milliseconds
 
@@ -129,40 +137,42 @@
   [test]
   (remove nil? (pmap up? (:nodes test))))
 
+(defn await-log
+  "Blocks until voltdb.log contains the given string."
+  [line]
+  (let [file (str base-dir "/log/volt.log")]
+    (c/sudo username
+            (c/cd base-dir
+                  ; There used to be a sleep here of *four minutes*. Why? --KRK
+                  (c/exec :tail :-n 20 file
+                          | :grep :-m 1 :-f line
+                          ; What is this xargs FOR? What was I thinking seven
+                          ; years ago? --KRK, 2023
+                          | :xargs (c/lit (str "echo \"\" >> " file
+                                               " \\;")))))))
+
 (defn await-start
-  "Blocks until the logfile reports 'Server completed initialization'."
+  "Blocks until the node is up, responding to client connections, and
+  @SystemInformation OVERVIEW returns."
   [node]
   (info "Waiting for" node "to start")
-  (timeout 250000
-           (throw (RuntimeException.
-                    (str node " failed to initialize in time; STDOUT:\n\n"
-                         (meh (c/exec :tail :-n 20
-                                      (str base-dir "/log/stdout.log")))
-                         "\n\nLOG:\n\n"
-                         (meh (c/exec :tail :-n 20
-                                      (str base-dir "/log/volt.log")))
-                         "\n\n")))
-           (c/sudo username
-                   (c/cd base-dir
-                         ; hack hack hack
-                         (Thread/sleep 240000)
-                         (c/exec :tail :-n 20 :-f "log/volt.log"
-                                 | :grep :-m 1 "completed initialization"
-                                 | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
-                   (info node "started"))))
+  (cu/await-tcp-port client-port)
+  (with-open [conn (connect node {:procedure-call-timeout 100
+                                  :reconnect? false})]
+    ; Per Ruth, just being able to ask for SystemInformation should indicate
+    ; the cluster is ready to use. We'll make sure we get at least one table
+    ; back, just in case.
+    (let [overview (call! conn "@SystemInformation" "OVERVIEW")]
+      (when (empty? overview)
+        (throw+ {:type ::empty-overview}))))
+  (info node "started"))
 
 (defn await-rejoin
   "Blocks until the logfile reports 'Node rejoin completed'"
   [node]
   (info "Waiting for" node "to rejoin")
-  (c/sudo username
-          (c/cd base-dir
-                ; hack hack hack
-                (Thread/sleep 5000)
-                (c/exec :tail :-n 20 :-f "log/volt.log"
-                        | :grep :-m 1 "Node rejoin completed"
-                        | :xargs (c/lit "echo \"\" >> log/volt.log \\;")))
-          (info node "rejoined")))
+  (await-log "Node rejoin completed")
+  (info node "rejoined"))
 
 (defn start-daemon!
   "Starts the daemon with the given command."
@@ -174,6 +184,11 @@
                                    :chdir   base-dir}
                                   (str base-dir "/bin/voltdb")
                                   cmd
+                                  ; TODO: These shouldn't be hardcoded--also,
+                                  ; didn't we have an explicit rejoin procedure
+                                  ; for joining a specific node with --host?
+                                  ; Should that still be the case, or is that
+                                  ; obsolete? --KRK 2023
                                   :--count (str 5)
                                   :--host (str "n1,n2,n3,n4,n5")
                 )
@@ -311,7 +326,6 @@
       [(str base-dir "/log/stdout.log")
        (str base-dir "/log/volt.log")])))
 
-
 (defn connect
   "Opens a connection to the given node and returns a voltdb client. Options:
 
@@ -325,7 +339,12 @@
                       :connection-response-timeout 1000}
                      opts)]
      (-> (doto (ClientConfig. "" "")
-           (.setReconnectOnConnectionLoss (get opts :reconnect? true))
+           ; TODO: is reconnection even something you can disable any more?
+           ; https://docs.voltdb.com/javadoc/java-client-api/org/voltdb/client/ClientConfig.html
+           ; makes it seem like maybe no? -KRK 2023
+           ; (.setReconnectOnConnectionLoss (get opts :reconnect? true))
+           ; We don't want to try and connect to all nodes
+           (.setTopologyChangeAware false)
            (.setProcedureCallTimeout (:procedure-call-timeout opts))
            (.setConnectionResponseTimeout (:connection-response-timeout opts)))
          (ClientFactory/createClient)
