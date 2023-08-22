@@ -31,6 +31,9 @@
   "Command line options for tools.cli"
   [["-h" "--help" "Print out this message and exit"]
 
+   ["-l" "--license FILE" "Path to the VoltDB license file on the control node"
+    :default "license.xml"]
+
    ["-n" "--node HOSTNAME" "Node(s) to run test on"
     :default default-hosts
     :assoc-fn (fn [m k v] (if (identical? (get m k) default-hosts)

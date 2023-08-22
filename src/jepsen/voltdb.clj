@@ -34,7 +34,7 @@
 (def base-dir "/tmp/jepsen-voltdb")
 
 (defn os
-  "Given OS, plus python & jdk8"
+  "Given OS, plus python & jdk"
   [os]
   (reify os/OS
     (setup! [_ test node]
@@ -86,31 +86,23 @@
 (defn init-db!
   "run voltdb init"
   [node]
-  (info "Initializing " node " voltdb")
+  (info "Initializing voltdb")
   (c/sudo username
         (c/cd base-dir
               (c/exec (str base-dir "/bin/voltdb") :init
               :--config (str base-dir "/deployment.xml")
-              | :tee (str base-dir "/log/stdout.log")
-              )
-        )
-  )
-  (info node " initialized")
-)
+              | :tee (str base-dir "/log/stdout.log"))))
+  (info node "initialized"))
 
 (defn configure!
   "Prepares config files and creates fresh DB."
   [test node]
   (c/sudo username
-        (c/cd base-dir
-              (c/exec :echo (deployment-xml test) :> "deployment.xml")))
-  (init-db! node)
-  (c/sudo username
-        (c/cd base-dir
-              (c/exec :ln :-f :-s (str base-dir "/voltdbroot/log/volt.log") (str base-dir "/log/volt.log" ))
-        )
-  )
-)
+    (c/cd base-dir
+          (c/upload (:license test) (str base-dir "/license.xml"))
+          (c/exec :echo (deployment-xml test) :> "deployment.xml")
+          (init-db! node)
+          (c/exec :ln :-f :-s (str base-dir "/voltdbroot/log/volt.log") (str base-dir "/log/volt.log" )))))
 
 (defn close!
   "Calls c.close"
