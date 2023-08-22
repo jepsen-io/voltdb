@@ -100,7 +100,7 @@
   (c/sudo username
     (c/cd base-dir
           (c/upload (:license test) (str base-dir "/license.xml"))
-          (c/exec :echo (deployment-xml test) :> "deployment.xml")
+          (cu/write-file! (deployment-xml test) "deployment.xml")
           (init-db! node)
           (c/exec :ln :-f :-s (str base-dir "/voltdbroot/log/volt.log") (str base-dir "/log/volt.log" )))))
 

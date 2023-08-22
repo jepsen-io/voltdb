@@ -8,6 +8,15 @@ Jepsen tests for voltdb.
 lein run -- --help
 ```
 
+## Running
+
+You may need to disable transparent huge pages on DB nodes (or, if running on LXC, on the host OS):
+
+```
+sudo bash -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
+sudo bash -c "echo never > /sys/kernel/mm/transparent_hugepage/defrag"
+```
+
 ## License
 
 Copyright © 2016 Jepsen, LLC
