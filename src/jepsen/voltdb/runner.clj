@@ -25,7 +25,7 @@
    "single"      single/single-test
    "dirty-read"  dirty-read/dirty-read-test})
 
-(def default-hosts [:n1 :n2 :n3 :n4 :n5])
+(def default-hosts ["n1" "n2" "n3" "n4" "n5"])
 
 (def optspec
   "Command line options for tools.cli"
