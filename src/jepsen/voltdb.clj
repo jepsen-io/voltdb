@@ -20,7 +20,8 @@
             [clojure.java.io      :as io]
             [clojure.java.shell   :refer [sh]]
             [clojure.pprint :refer [pprint]]
-            [clojure.tools.logging :refer [info warn]])
+            [clojure.tools.logging :refer [info warn]]
+            [slingshot.slingshot :refer [try+ throw+]])
   (:import (org.voltdb VoltTable
                        VoltType
                        VoltTableRow)
