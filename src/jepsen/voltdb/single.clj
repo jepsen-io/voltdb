@@ -13,6 +13,7 @@
             [jepsen.os.debian     :as debian]
             [jepsen.checker.timeline :as timeline]
             [jepsen.voltdb        :as voltdb]
+            [jepsen.voltdb [client :as vc]]
             [knossos.model        :as model]
             [knossos.op           :as op]
             [clojure.string       :as str]
@@ -30,7 +31,7 @@
    (let [initialized? (promise)]
      (reify client/Client
        (open! [_ test node]
-         (let [conn (voltdb/connect
+         (let [conn (vc/connect
                       node (select-keys opts
                                         [:procedure-call-timeout
                                          :connection-response-timeout]))]
@@ -38,28 +39,24 @@
 
        (setup! [_ test]
          (when (deliver initialized? true)
-           (try
-             (c/on node
-                   ; Create table
-                   (voltdb/sql-cmd! "CREATE TABLE registers (
-                                    id          INTEGER UNIQUE NOT NULL,
-                                    value       INTEGER NOT NULL,
-                                    PRIMARY KEY (id)
-                                    );
-                                    PARTITION TABLE registers ON COLUMN id;")
-                   (voltdb/sql-cmd! "CREATE PROCEDURE registers_cas
-                                    PARTITION ON TABLE registers COLUMN id
-                                    AS
-                                    UPDATE registers SET value = ?
-                                    WHERE id = ? AND value = ?;")
-                   (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
-                                    jepsen.procedures.SRegisterStrongRead;")
-                   (voltdb/sql-cmd! "PARTITION PROCEDURE SRegisterStrongRead
-                                    ON TABLE registers COLUMN id;")
-                   (info node "table created"))
-             (catch RuntimeException e
-               (voltdb/close! conn)
-               (throw e)))))
+           (c/on node
+                 ; Create table
+                 (voltdb/sql-cmd! "CREATE TABLE registers (
+                                  id          INTEGER UNIQUE NOT NULL,
+                                  value       INTEGER NOT NULL,
+                                  PRIMARY KEY (id)
+                                  );
+                                  PARTITION TABLE registers ON COLUMN id;")
+                 (voltdb/sql-cmd! "CREATE PROCEDURE registers_cas
+                                  PARTITION ON TABLE registers COLUMN id
+                                  AS
+                                  UPDATE registers SET value = ?
+                                  WHERE id = ? AND value = ?;")
+                 (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
+                                  jepsen.procedures.SRegisterStrongRead;")
+                 (voltdb/sql-cmd! "PARTITION PROCEDURE SRegisterStrongRead
+                                  ON TABLE registers COLUMN id;")
+                 (info node "table created"))))
 
        (invoke! [this test op]
          (info "Process " (:process op) "using node" node)
@@ -71,7 +68,7 @@
                                     "SRegisterStrongRead"
                                     "REGISTERS.select")
                              v (-> conn
-                                   (voltdb/call! proc id)
+                                   (vc/call! proc id)
                                    first
                                    :rows
                                    first
@@ -79,11 +76,11 @@
                          (assoc op
                                 :type :ok
                                 :value (independent/tuple id v)))
-               :write (do (voltdb/call! conn "REGISTERS.upsert" id value)
+               :write (do (vc/call! conn "REGISTERS.upsert" id value)
                           (assoc op :type :ok))
                :cas   (let [[v v'] value
                             res (-> conn
-                                    (voltdb/call! "registers_cas" v' id v)
+                                    (vc/call! "registers_cas" v' id v)
                                     first
                                     :rows
                                     first
@@ -110,7 +107,7 @@
        (teardown! [_ test])
 
        (close! [_ test]
-         (voltdb/close! conn))))))
+         (vc/close! conn))))))
 
 (defn r   [_ _] {:type :invoke, :f :read, :value nil})
 (defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})

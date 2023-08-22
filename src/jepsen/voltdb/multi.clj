@@ -12,6 +12,7 @@
             [jepsen.os.debian       :as debian]
             [jepsen.checker.timeline :as timeline]
             [jepsen.voltdb          :as voltdb]
+            [jepsen.voltdb [client :as vc]]
             [knossos.model          :as model]
             [knossos.op             :as op]
             [clojure.string         :as str]
@@ -37,7 +38,7 @@
    (let [initialized? (promise)]
      (reify client/Client
        (open! [_ test node]
-         (let [conn (voltdb/connect
+         (let [conn (vc/connect
                       node (select-keys opts
                                         [:procedure-call-timeout
                                          :connection-response-timeout]))]
@@ -45,27 +46,23 @@
 
        (setup! [_ test]
          (when (deliver initialized? true)
-           (try
-             (c/on node
-                   ; Create table
-                   (voltdb/sql-cmd! "CREATE TABLE multi (
-                                    system      INTEGER NOT NULL,
-                                    key         VARCHAR NOT NULL,
-                                    value       INTEGER NOT NULL,
-                                    PRIMARY KEY (system, key)
-                                    );
-                                    PARTITION TABLE multi ON COLUMN key;")
-                   (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
-                                    jepsen.procedures.MultiTxn;")
-                   (info node "table created")
-                   ; Create initial systems
-                   (dotimes [i (:system-count opts)]
-                     (doseq [k (:keys opts)]
-                       (voltdb/call! conn "MULTI.insert" i (name k) 0)))
-                   (info node "initial state populated"))
-             (catch RuntimeException e
-               (voltdb/close! conn)
-               (throw e)))))
+           (c/on node
+                 ; Create table
+                 (voltdb/sql-cmd! "CREATE TABLE multi (
+                                  system      INTEGER NOT NULL,
+                                  key         VARCHAR NOT NULL,
+                                  value       INTEGER NOT NULL,
+                                  PRIMARY KEY (system, key)
+                                  );
+                                  PARTITION TABLE multi ON COLUMN key;")
+                 (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
+                                  jepsen.procedures.MultiTxn;")
+                 (info node "table created")
+                 ; Create initial systems
+                 (dotimes [i (:system-count opts)]
+                   (doseq [k (:keys opts)]
+                     (vc/call! conn "MULTI.insert" i (name k) 0)))
+                 (info node "initial state populated"))))
 
        (invoke! [this test op]
          (try
@@ -83,7 +80,7 @@
                                 (map #(or (nth % 2) -1)) ; gotta pick an int
                                 (into-array Integer/TYPE))
                         res (-> conn
-                                (voltdb/call! "MultiTxn" system fs ks vs))
+                                (vc/call! "MultiTxn" system fs ks vs))
                         ; Map results of reads back into read values
                         txn' (mapv (fn [[f k v :as op] table]
                                      (case f
@@ -114,7 +111,7 @@
        (teardown! [_ test])
 
        (close! [_ test]
-         (voltdb/close! conn))))))
+         (vc/close! conn))))))
 
 (defn op
   "An op is a tuple of [f k v] like [:read 0 nil], or [:write 2 3]"

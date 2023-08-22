@@ -11,6 +11,7 @@
                     [tests        :as tests]]
             [jepsen.os.debian     :as debian]
             [jepsen.voltdb        :as voltdb]
+            [jepsen.voltdb [client :as vc]]
             [knossos.model        :as model]
             [knossos.op           :as op]
             [clojure.string       :as str]
@@ -24,7 +25,7 @@
   (let [initialized? (promise)]
     (reify client/Client
       (open! [_ test node]
-        (client n node (voltdb/connect node)))
+        (client n node (vc/connect node)))
 
       (setup! [_ test node]
         (c/on node
@@ -43,19 +44,19 @@
         (let [id    (key (:value op))
               value (val (:value op))]
           (case (:f op)
-            :read   (let [v (->> (voltdb/ad-hoc! conn "SELECT value FROM rregisters WHERE id = ? ORDER BY copy ASC;" id)
+            :read   (let [v (->> (vc/ad-hoc! conn "SELECT value FROM rregisters WHERE id = ? ORDER BY copy ASC;" id)
                                 first
                                 :rows
                                 (map :VALUE))]
                       (assoc op
                              :type :ok
                              :value (independent/tuple id v)))
-            :write  (do (voltdb/call! conn "RRegisterUpsert"
-                                      id (long-array (range n)) value)
+            :write  (do (vc/call! conn "RRegisterUpsert"
+                                  id (long-array (range n)) value)
                         (assoc op :type :ok)))))
 
       (teardown! [_ test]
-        (voltdb/close! conn)))))
+        (vc/close! conn)))))
 
 
 (defn r   [_ _] {:type :invoke, :f :read, :value nil})

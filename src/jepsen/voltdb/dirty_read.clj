@@ -22,6 +22,7 @@
             [jepsen.generator.context :as gen.context]
             [jepsen.os.debian     :as debian]
             [jepsen.voltdb        :as voltdb]
+            [jepsen.voltdb [client :as vc]]
             [knossos.model        :as model]
             [knossos.op           :as op]
             [clojure.string       :as str]
@@ -36,7 +37,7 @@
    (let [initialized? (promise)]
      (reify client/Client
        (open! [_ test node]
-         (let [conn (voltdb/connect
+         (let [conn (vc/connect
                       node
                       (select-keys opts
                                    [:procedure-call-timeout
@@ -66,17 +67,17 @@
                            (assoc op :type :ok, :value :rejoined)))
 
              :read (let [v (->> (:value op)
-                                (voltdb/call! conn "DIRTY_READS.select")
+                                (vc/call! conn "DIRTY_READS.select")
                                 first
                                 :rows
                                 (map :ID)
                                 first)]
                         (assoc op :type (if v :ok :fail), :value v))
 
-             :write (do (voltdb/call! conn "DIRTY_READS.insert" (:value op))
+             :write (do (vc/call! conn "DIRTY_READS.insert" (:value op))
                         (assoc op :type :ok))
 
-             :strong-read (->> (voltdb/call! conn "DirtyReadStrongRead")
+             :strong-read (->> (vc/call! conn "DirtyReadStrongRead")
                                first
                                :rows
                                (map :ID)
@@ -93,7 +94,7 @@
        (teardown! [_ test])
 
        (close! [_ test]
-         (voltdb/close! conn))))))
+         (vc/close! conn))))))
 
 (defn checker
   "Verifies that we never read an element from a transaction which did not

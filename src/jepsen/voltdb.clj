@@ -14,6 +14,7 @@
             [jepsen.os            :as os]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
+            [jepsen.voltdb.client :as vc]
             [knossos.model        :as model]
             [clojure.data.xml     :as xml]
             [clojure.string       :as str]
@@ -30,12 +31,6 @@
                               ClientFactory
                               ClientResponse
                               ProcedureCallback)))
-
-(declare connect)
-(declare close!)
-(declare ad-hoc!)
-(declare sql-cmd!)
-(declare call!)
 
 (def username "voltdb")
 (def base-dir "/tmp/jepsen-voltdb")
@@ -113,31 +108,6 @@
           (init-db! node)
           (c/exec :ln :-f :-s (str base-dir "/voltdbroot/log/volt.log") (str base-dir "/log/volt.log" )))))
 
-(defn close!
-  "Calls c.close"
-  [^Client c]
-  (.close c))
-
-(defn up?
-  "Is the given node ready to accept connections? Returns node, or nil."
-  [node]
-  (let [config (ClientConfig. "" "")]
-    (.setProcedureCallTimeout config 100)
-    (.setConnectionResponseTimeout config 100)
-
-    (let [c (ClientFactory/createClient config)]
-      (try
-        (.createConnection c (name node))
-        (.getInstanceId c)
-        node
-      (catch java.net.ConnectException e)
-      (finally (close! c))))))
-
-(defn up-nodes
-  "What DB nodes are actually alive?"
-  [test]
-  (remove nil? (pmap up? (:nodes test))))
-
 (defn await-log
   "Blocks until voltdb.log contains the given string."
   [line]
@@ -157,13 +127,14 @@
   @SystemInformation OVERVIEW returns."
   [node]
   (info "Waiting for" node "to start")
-  (cu/await-tcp-port client-port)
-  (with-open [conn (connect node {:procedure-call-timeout 100
-                                  :reconnect? false})]
+  (cu/await-tcp-port client-port {:log-interval 10000
+                                  :timeout 300000})
+  (with-open [conn (vc/connect node {:procedure-call-timeout 100
+                                     :reconnect? false})]
     ; Per Ruth, just being able to ask for SystemInformation should indicate
     ; the cluster is ready to use. We'll make sure we get at least one table
     ; back, just in case.
-    (let [overview (call! conn "@SystemInformation" "OVERVIEW")]
+    (let [overview (vc/call! conn "@SystemInformation" "OVERVIEW")]
       (when (empty? overview)
         (throw+ {:type ::empty-overview}))))
   (info node "started"))
@@ -218,7 +189,7 @@
   [test node]
   (locking rejoin!
     (info "rejoining" node)
-    (start-daemon! test :start (rand-nth (up-nodes test)))
+    (start-daemon! test :start (rand-nth (vc/up-nodes test)))
     (await-rejoin node)))
 
 (defn stop!
@@ -281,16 +252,6 @@
   (sql-cmd! "load classes jepsen-procedures.jar")
   (info node "stored procedures loaded"))
 
-(defn kill-reconnect-threads!
-  "VoltDB client leaks reconnect threads; this kills them all."
-  []
-  (doseq [t (keys (Thread/getAllStackTraces))]
-    (when (= "Retry Connection" (.getName t))
-      ; The reconnect loop swallows Exception so we can't even use interrupt
-      ; here. Luckily I don't think it has too many locks we have to worry
-      ; about.
-      (.stop t))))
-
 (defn db
   "VoltDB around the given package tarball URL"
   [url force-download?]
@@ -320,104 +281,12 @@
       (stop! test node)
       (c/su
         (c/exec :rm :-rf (c/lit (str base-dir "/*"))))
-      (kill-reconnect-threads!))
+      (vc/kill-reconnect-threads!))
 
     db/LogFiles
     (log-files [db test node]
       [(str base-dir "/log/stdout.log")
        (str base-dir "/log/volt.log")])))
-
-(defn connect
-  "Opens a connection to the given node and returns a voltdb client. Options:
-
-      :reconnect?
-      :procedure-call-timeout
-      :connection-response-timeout"
-  ([node]
-   (connect node {}))
-  ([node opts]
-   (let [opts (merge {:procedure-call-timeout 100
-                      :connection-response-timeout 1000}
-                     opts)]
-     (-> (doto (ClientConfig. "" "")
-           ; TODO: is reconnection even something you can disable any more?
-           ; https://docs.voltdb.com/javadoc/java-client-api/org/voltdb/client/ClientConfig.html
-           ; makes it seem like maybe no? -KRK 2023
-           ; (.setReconnectOnConnectionLoss (get opts :reconnect? true))
-           ; We don't want to try and connect to all nodes
-           (.setTopologyChangeAware false)
-           (.setProcedureCallTimeout (:procedure-call-timeout opts))
-           (.setConnectionResponseTimeout (:connection-response-timeout opts)))
-         (ClientFactory/createClient)
-         (doto
-           (.createConnection (name node)))))))
-
-(defn volt-table->map
-  "Converts a VoltDB table to a data structure like
-
-  {:status status-code
-   :schema [{:column_name VoltType, ...}]
-   :rows [{:k1 v1, :k2 v2}, ...]}"
-  [^VoltTable t]
-  (let [column-count (.getColumnCount t)
-        column-names (loop [i     0
-                            cols  (transient [])]
-                       (if (= i column-count)
-                         (persistent! cols)
-                         (recur (inc i)
-                                (conj! cols (keyword (.getColumnName t i))))))
-        basis        (apply create-struct column-names)
-        column-types (loop [i 0
-                            types (transient [])]
-                       (if (= i column-count)
-                         (persistent! types)
-                         (recur (inc i)
-                                (conj! types (.getColumnType t i)))))
-        row          (doto (.cloneRow t)
-                       (.resetRowPosition))]
-  {:status (.getStatusCode t)
-   :schema (apply struct basis column-types)
-   :rows (loop [rows (transient [])]
-           (if (.advanceRow row)
-             (let [cols (object-array column-count)]
-               (loop [j 0]
-                 (when (< j column-count)
-                   (aset cols j (.get row j ^VoltType (nth column-types j)))
-                   (recur (inc j))))
-               (recur (conj! rows (clojure.lang.PersistentStructMap/construct
-                                    basis
-                                    (seq cols)))))
-             ; Done
-             (persistent! rows)))}))
-
-(defn call!
-  "Call a stored procedure and returns a seq of VoltTable results."
-  [^Client client procedure & args]
-  (let [res (.callProcedure client procedure (into-array Object args))]
-    ; Docs claim callProcedure will throw, but tutorial checks anyway so ???
-    (assert (= (.getStatus res) ClientResponse/SUCCESS))
-    (map volt-table->map (.getResults res))))
-
-(defn async-call!
-  "Call a stored procedure asynchronously. Returns a promise of a seq of
-  VoltTable results. If a final fn is given, passes ClientResponse to that fn."
-  [^Client client procedure & args]
-  (let [p (promise)]
-    (.callProcedure client
-                    (reify ProcedureCallback
-                      (clientCallback [this res]
-                        (when (fn? (last args))
-                          ((last args) res))
-                        (deliver p (map volt-table->map (.getResults res)))))
-                    procedure
-                    (into-array Object (if (fn? (last args))
-                                         (butlast args)
-                                         args)))))
-
-(defn ad-hoc!
-  "Run an ad-hoc SQL stored procedure."
-  [client & args]
-  (apply call! client "@AdHoc" args))
 
 ;; Nemeses
 
@@ -434,7 +303,7 @@
                    [:killed (:value op)])
         :stop  (->> (:value op)
                     (map (fn [node]
-                           [node (if (up? node)
+                           [node (if (vc/up? node)
                                    :already-up
                                    (do (rejoin! test node)
                                        :rejoined))])
@@ -488,7 +357,7 @@
      (reify nemesis/Nemesis
        (setup! [this test]
          (let [node (first (:nodes test))
-               conn (connect node {})]
+               conn (vc/connect node {})]
            (when (deliver initialized? true)
              (try
                (c/on node
@@ -499,14 +368,14 @@
                                );")
                      (info node "mentions table created"))
                (finally
-                 (close! conn)))))
+                 (vc/close! conn)))))
          this)
 
        (invoke! [this test op]
          (assert (= :rando (:f op)))
-         (let [conn (connect (first (:value op))
-                             {:procedure-call-timeout 100
-                              :reconnect? false})]
+         (let [conn (vc/connect (first (:value op))
+                                {:procedure-call-timeout 100
+                                 :reconnect? false})]
            (future
              (try
                (dotimes [i 50000]
@@ -514,7 +383,7 @@
                  ; If we go TOO fast we'll start forcing other ops to time
                  ; out. If we go too slow we won't get a long enough log.
                  (Thread/sleep 1)
-                 (async-call!
+                 (vc/async-call!
                    conn "MENTIONS.insert" i (rand-int 1000)
                    (fn [^ClientResponse res]
                      (when (or (= ClientResponse/SUCCESS (.getStatus res))
@@ -523,7 +392,7 @@
                                   (.getStatus res)))
                        (->> res
                             .getResults
-                            (map volt-table->map)
+                            (map vc/volt-table->map)
                             first
                             :rows
                             first
@@ -533,7 +402,7 @@
                  (info "Rando nemesis finished with" (.getMessage e)))
                (finally
                  (info "Rando nemesis finished writing")
-                 (close! conn))))
+                 (vc/close! conn))))
            (assoc op :value @writes)))
 
        (teardown! [this test])))))
@@ -565,7 +434,7 @@
 (defn rando-gen
   "Emits rando operations on random nodes."
   [test process]
-  (when-let [up (seq (filter up? (:nodes test)))]
+  (when-let [up (seq (filter vc/up? (:nodes test)))]
     {:type  :info
      :f     :rando
      :value (rand-nth up)}))
