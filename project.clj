@@ -9,7 +9,8 @@
                  [org.voltdb/voltdbclient "6.2"]]
   :jvm-opts ["-Xmx8g"
              "-XX:MaxInlineLevel=32"
-             "-server"]
+             "-server"
+             "--add-opens" "java.base/sun.nio.ch=ALL-UNNAMED"]
   :main jepsen.voltdb.runner
   :aot  [jepsen.voltdb.runner
          clojure.tools.logging.impl])
