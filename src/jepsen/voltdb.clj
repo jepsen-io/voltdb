@@ -39,11 +39,9 @@
   (reify os/OS
     (setup! [_ test node]
       (os/setup! os test node)
-      (debian/install ["python2.7"])
+      (debian/install ["python2.7" "openjdk-17-jdk-headless"])
       (c/exec :update-alternatives :--install "/usr/bin/python" "python"
-              "/usr/bin/python2.7" 1)
-      (debian/install-jdk8!)
-      (info "JDK8 installed"))
+              "/usr/bin/python2.7" 1))
 
     (teardown! [_ test node]
       (os/teardown! os test node))))
@@ -52,11 +50,18 @@
   "Install the given tarball URL"
   [node url force?]
   (c/su
-    (cu/install-archive! node url base-dir force?)
+    (if-let [[m path _ filename] (re-find #"^file://((.*/)?([^/]+))$" url)]
+      (do ; We're installing a local tarball from the control node; upload it.
+          (c/exec :mkdir :-p "/tmp/jepsen")
+          (let [remote-path (str "/tmp/jepsen/" filename)]
+            (c/upload path remote-path)
+            (cu/install-archive! (str "file://" remote-path)
+                                 base-dir {:force? force?})))
+      ; Probably an HTTP URI; just let install-archive handle it
+      (cu/install-archive! url base-dir {:force? force?}))
     (c/exec :mkdir (str base-dir "/log"))
     (cu/ensure-user! username)
     (c/exec :chown :-R (str username ":" username) base-dir)
-
     (info "VoltDB unpacked")))
 
 (defn deployment-xml
