@@ -6,7 +6,14 @@
   :dependencies [[org.clojure/clojure "1.11.1"]
                  [jepsen "0.3.3"]
                  [org.clojure/data.xml "0.0.8"]
-                 [org.voltdb/voltdbclient "12.1.0"]]
+                 [org.voltdb/voltdbclient "12.1.0"]
+                 ; VoltDB seems to depend on Netty classes but doesn't declare
+                 ; a dependency on it?
+                 [io.netty/netty-all "4.1.94.Final"]
+                 ; Might need these too?
+                 ;[io.netty/netty-tcnative-boringssl-static "2.0.56.Final"]
+                 ;[io.netty/netty-tcnative-classes "2.0.56.Final"]
+                 ]
   :jvm-opts ["-Xmx8g"
              "-XX:MaxInlineLevel=32"
              "-server"
