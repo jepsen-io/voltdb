@@ -10,7 +10,8 @@
             [jepsen.voltdb :as voltdb]
             [jepsen.voltdb [dirty-read :as dirty-read]
                            [multi      :as multi]
-                           [single     :as single]]))
+                           [single     :as single]
+                           [redundant-register :as redundant-register]]))
 
 (defn one-of
   "Takes a collection and returns a string like \"Must be one of ...\" and a
@@ -21,9 +22,10 @@
 
 (def tests
   "A map of test names to test constructors."
-  {"multi"       multi/multi-test
-   "single"      single/single-test
-   "dirty-read"  dirty-read/dirty-read-test})
+  {"multi"              multi/multi-test
+   "single"             single/single-test
+   "dirty-read"         dirty-read/dirty-read-test
+   "redundant-register" redundant-register/rregister-test})
 
 (def default-hosts ["n1" "n2" "n3" "n4" "n5"])
 

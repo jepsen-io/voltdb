@@ -21,43 +21,53 @@
 (defn client
   "A client which implements a register, identified by a key. The register is
   stored in n copies, all of which should agree."
-  [n node conn]
-  (let [initialized? (promise)]
-    (reify client/Client
-      (open! [_ test node]
-        (client n node (vc/connect node)))
+  ([n]
+   (client n nil (promise) nil))
+  ([n node initialized? conn]
+   (reify client/Client
+     (open! [_ test node]
+       (client n node initialized? (vc/connect node)))
 
-      (setup! [_ test node]
-        (c/on node
-              (when (deliver initialized? true)
-                ; Create table
-                (voltdb/sql-cmd! "CREATE TABLE rregisters (
-                                    id            INTEGER NOT NULL,
-                                    copy          INTEGER NOT NULL,
-                                    value         INTEGER NOT NULL,
-                                    PRIMARY KEY   (id, copy)
+     (setup! [_ test]
+       (when (deliver initialized? true)
+         (c/on node
+               (vc/with-race-retry
+                 ; Create table
+                 (voltdb/sql-cmd! "CREATE TABLE rregisters (
+                                  id            INTEGER NOT NULL,
+                                  copy          INTEGER NOT NULL,
+                                  value         INTEGER NOT NULL,
+                                  PRIMARY KEY   (id, copy)
                                   );
                                   PARTITION TABLE rregisters ON COLUMN copy;")
-                (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS jepsen.procedures.RRegisterUpsert;"))))
+                 (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS jepsen.procedures.RRegisterUpsert;")))))
 
-      (invoke! [this test op]
-        (let [id    (key (:value op))
-              value (val (:value op))]
-          (case (:f op)
-            :read   (let [v (->> (vc/ad-hoc! conn "SELECT value FROM rregisters WHERE id = ? ORDER BY copy ASC;" id)
+     (invoke! [this test op]
+       (let [id    (key (:value op))
+             value (val (:value op))]
+         (case (:f op)
+           :read   (let [v (->> (vc/ad-hoc! conn "SELECT value FROM rregisters WHERE id = ? ORDER BY copy ASC;" id)
                                 first
                                 :rows
                                 (map :VALUE))]
-                      (assoc op
-                             :type :ok
-                             :value (independent/tuple id v)))
-            :write  (do (vc/call! conn "RRegisterUpsert"
-                                  id (long-array (range n)) value)
-                        (assoc op :type :ok)))))
+                     (assoc op
+                            :type :ok
+                            :value (independent/tuple id v)))
+           :write  (do (vc/call! conn "RRegisterUpsert"
+                                 id (long-array (range n)) value)
+                       (assoc op :type :ok)))))
 
-      (teardown! [_ test]
-        (vc/close! conn)))))
+     (teardown! [_ test])
 
+     (close! [_ test]
+       (vc/close! conn))
+
+     client/Reusable
+     (reusable? [_ test]
+       ; I'm not entirely sure whether this IS safe or not, but reopening
+       ; clients is blowing out the maximum thread count in just a few minutes.
+       ; Let's try it and see. --KRK 2023
+       true))))
 
 (defn r   [_ _] {:type :invoke, :f :read, :value nil})
 (defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})
@@ -80,31 +90,30 @@
          :mixed-reads mixed-reads}))))
 
 (defn rregister-test
-  "Takes a tarball URL"
-  [url]
+  "Takes command line options and returns a workload for testing redundant
+  registers, to be merged into a test map."
+  [opts]
   (let [n 5]
-    (assoc tests/noop-test
-           :name    "voltdb redundant-register"
-           :os      debian/os
-           :client  (client n nil)
-           :db      (voltdb/db url)
-           :model   (model/cas-register 0)
-           :checker (checker/compose
-                      {:atomic (independent/checker (atomic-checker n))
-                       :perf   (checker/perf)})
-           :nemesis (nemesis/partition-random-halves)
-           :concurrency 100
-           :generator (->> (independent/concurrent-generator
-                             10
-                             (range)
-                             (fn [id]
-                               (->> w
-                                    (gen/reserve 5 r)
-                                    (gen/delay 1/100)
-                                    (gen/time-limit 30))))
-                           (gen/nemesis
-                             (cycle [(gen/sleep 30)
-                                     {:type :info :f :start}
-                                     (gen/sleep 30)
-                                     {:type :info :f :stop}]))
-                           (gen/time-limit 200)))))
+    (voltdb/base-test
+      (assoc opts
+             :name    "voltdb redundant-register"
+             :client  (client n)
+             :checker (checker/compose
+                        {:atomic (independent/checker (atomic-checker n))
+                         :perf   (checker/perf)})
+             :nemesis (voltdb/general-nemesis)
+             :concurrency 100
+             :generator (->> (independent/concurrent-generator
+                               10
+                               (range)
+                               (fn [id]
+                                 (->> w
+                                      (gen/reserve 5 r)
+                                      (gen/delay 1/100)
+                                      (gen/time-limit 30))))
+                             (gen/nemesis
+                               (cycle [(gen/sleep 30)
+                                       {:type :info :f :start}
+                                       (gen/sleep 30)
+                                       {:type :info :f :stop}]))
+                             (voltdb/general-gen opts))))))
