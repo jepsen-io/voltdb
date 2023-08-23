@@ -129,9 +129,10 @@
            :client  (client (select-keys opts [:strong-reads?
                                                :procedure-call-timeout
                                                :connection-response-timeout]))
-           :model   (model/cas-register nil)
            :checker (checker/compose
-                      {:linear   (independent/checker checker/linearizable)
+                      {:linear   (independent/checker
+                                   (checker/linearizable
+                                     {:model (model/cas-register nil)}))
                        :timeline (independent/checker (timeline/html))
                        :perf     (checker/perf)})
            :nemesis (voltdb/general-nemesis)
