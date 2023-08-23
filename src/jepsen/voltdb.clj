@@ -93,10 +93,20 @@
   (info "Initializing voltdb")
   (c/sudo username
         (c/cd base-dir
-              (c/exec (str base-dir "/bin/voltdb") :init
-              :--config (str base-dir "/deployment.xml")
-             
-              | :tee (str base-dir "/log/stdout.log"))))
+              ; We think there's a bug that breaks sqlcmd if it runs early in
+              ; the creation of a fresh DB--it'll log "Cannot invoke
+              ; java.util.Map.values() because arglists is null". To work
+              ; around that, we're creating a table so the schema is nonempty.
+              (let [init-schema "CREATE TABLE work_around_volt_bug (
+                                 id int not null
+                                 );"
+                    init-schema-file "init-schema"]
+              (cu/write-file! init-schema init-schema-file)
+              (c/exec (str base-dir "/bin/voltdb")
+                      :init
+                      :-s init-schema-file
+                      :--config (str base-dir "/deployment.xml")
+                      | :tee (str base-dir "/log/stdout.log")))))
   (info node "initialized"))
 
 (defn configure!
