@@ -361,11 +361,12 @@
            (when (deliver initialized? true)
              (try
                (c/on node
-                     ; Create table
-                     (sql-cmd! "CREATE TABLE mentions (
-                                 well     INTEGER NOT NULL,
-                                 actually INTEGER NOT NULL
-                               );")
+                     (vc/with-race-retry
+                       ; Create table
+                       (sql-cmd! "CREATE TABLE mentions (
+                                   well     INTEGER NOT NULL,
+                                   actually INTEGER NOT NULL
+                                 );"))
                      (info node "mentions table created"))
                (finally
                  (vc/close! conn)))))

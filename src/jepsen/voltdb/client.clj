@@ -4,7 +4,8 @@
   (:require [clojure [pprint :refer [pprint]]
                      [string :as str]]
             [clojure.tools.logging :refer [info warn]]
-            [jepsen.util :as util])
+            [jepsen.util :as util]
+            [slingshot.slingshot :refer [try+ throw+]])
   (:import (org.voltdb VoltTable
                        VoltType
                        VoltTableRow)
@@ -140,3 +141,30 @@
   "Run an ad-hoc SQL stored procedure."
   [client & args]
   (apply call! client "@AdHoc" args))
+
+(defmacro with-race-retry
+  "If you try to perform DDL concurrently using @AdHoc, Volt tends to complain:
+  Invalid catalog update(@AdHoc) request: Can't do catalog update(@AdHoc) while
+  another one is in progress. Please retry catalog update(@AdHoc) later. This
+  macro performs exponential backoff and retry of its body, catching that
+  specific error."
+  [& body]
+  `(loop [tries# 10
+          delay# 10]
+     (let [r# (try+ ~@body
+                    ; This branch catches errors thrown by the sql-cmd! shell
+                    ; wrapper. Later we should add one for the actual client.
+                    (catch [:type :jepsen.control/nonzero-exit, :exit 255] e#
+                      (info "with-race-retry caught")
+                      (if (and (pos? tries#)
+                               (re-find #"Can't do catalog update.+ while another one is in progress" (:err e#)))
+                        ::retry
+                        (throw+ e#))))]
+       (if (= r# ::retry)
+         ; Delay rises by a factor of 1-2 each time
+         (let [delay'# (* delay# (+ 1 (rand)))]
+           (info "Sleeping for" delay'# "ms")
+           (Thread/sleep delay'#)
+           (recur (dec tries#) delay'#))
+         ; Done
+         r#))))

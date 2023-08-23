@@ -61,7 +61,7 @@
          (try
            (case (:f op)
              ; Race conditions ahoy, awful hack
-             :rejoin (if (voltdb/up? node)
+             :rejoin (if (vc/up? node)
                        (assoc op :type :ok, :value :already-up)
                        (do (c/on node (voltdb/rejoin! test node))
                            (assoc op :type :ok, :value :rejoined)))

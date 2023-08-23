@@ -26,19 +26,20 @@
       :strong-reads?                 Whether to perform normal or strong selects
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
-  ([opts] (client nil nil opts))
-  ([conn node opts]
-   (let [initialized? (promise)]
-     (reify client/Client
-       (open! [_ test node]
-         (let [conn (vc/connect
-                      node (select-keys opts
-                                        [:procedure-call-timeout
-                                         :connection-response-timeout]))]
-           (client conn node opts)))
+  ([opts] (client nil nil (promise) opts))
+  ([conn node initialized? opts]
+   (reify client/Client
+     (open! [_ test node]
+       (let [conn (vc/connect
+                    node (select-keys opts
+                                      [:procedure-call-timeout
+                                       :connection-response-timeout]))]
+         (client conn node initialized? opts)))
 
-       (setup! [_ test]
-         (when (deliver initialized? true)
+     (setup! [_ test]
+       (when (deliver initialized? true)
+         (info node "creating table")
+         (vc/with-race-retry
            (c/on node
                  ; Create table
                  (voltdb/sql-cmd! "CREATE TABLE registers (
@@ -55,59 +56,59 @@
                  (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
                                   jepsen.procedures.SRegisterStrongRead;")
                  (voltdb/sql-cmd! "PARTITION PROCEDURE SRegisterStrongRead
-                                  ON TABLE registers COLUMN id;")
-                 (info node "table created"))))
+                                  ON TABLE registers COLUMN id;")))
+         (info node "table created")))
 
-       (invoke! [this test op]
-         (info "Process " (:process op) "using node" node)
-         (try
-           (let [id     (key (:value op))
-                 value  (val (:value op))]
-             (case (:f op)
-               :read   (let [proc (if (:strong-reads? opts)
-                                    "SRegisterStrongRead"
-                                    "REGISTERS.select")
-                             v (-> conn
-                                   (vc/call! proc id)
-                                   first
-                                   :rows
-                                   first
-                                   :VALUE)]
-                         (assoc op
-                                :type :ok
-                                :value (independent/tuple id v)))
-               :write (do (vc/call! conn "REGISTERS.upsert" id value)
-                          (assoc op :type :ok))
-               :cas   (let [[v v'] value
-                            res (-> conn
-                                    (vc/call! "registers_cas" v' id v)
-                                    first
-                                    :rows
-                                    first
-                                    :modified_tuples)]
-                        (assert (#{0 1} res))
-                        (assoc op :type (if (zero? res) :fail :ok)))))
-           (catch org.voltdb.client.NoConnectionsException e
-             (Thread/sleep 1000)
-             (assoc op :type :fail, :error :no-conns))
-           (catch org.voltdb.client.ProcCallException e
-             (let [type (if (= :read (:f op)) :fail :info)]
-               (condp re-find (.getMessage e)
-                 #"^No response received in the allotted time"
-                 (assoc op :type type, :error :timeout)
+     (invoke! [this test op]
+       (info "Process " (:process op) "using node" node)
+       (try
+         (let [id     (key (:value op))
+               value  (val (:value op))]
+           (case (:f op)
+             :read   (let [proc (if (:strong-reads? opts)
+                                  "SRegisterStrongRead"
+                                  "REGISTERS.select")
+                           v (-> conn
+                                 (vc/call! proc id)
+                                 first
+                                 :rows
+                                 first
+                                 :VALUE)]
+                       (assoc op
+                              :type :ok
+                              :value (independent/tuple id v)))
+             :write (do (vc/call! conn "REGISTERS.upsert" id value)
+                        (assoc op :type :ok))
+             :cas   (let [[v v'] value
+                          res (-> conn
+                                  (vc/call! "registers_cas" v' id v)
+                                  first
+                                  :rows
+                                  first
+                                  :modified_tuples)]
+                      (assert (#{0 1} res))
+                      (assoc op :type (if (zero? res) :fail :ok)))))
+         (catch org.voltdb.client.NoConnectionsException e
+           (Thread/sleep 1000)
+           (assoc op :type :fail, :error :no-conns))
+         (catch org.voltdb.client.ProcCallException e
+           (let [type (if (= :read (:f op)) :fail :info)]
+             (condp re-find (.getMessage e)
+               #"^No response received in the allotted time"
+               (assoc op :type type, :error :timeout)
 
-                 #"^Connection to database host .+ was lost before a response"
-                 (assoc op :type type, :error :conn-lost)
+               #"^Connection to database host .+ was lost before a response"
+               (assoc op :type type, :error :conn-lost)
 
-                 #"^Transaction dropped due to change in mastership"
-                 (assoc op :type type, :error :mastership-change)
+               #"^Transaction dropped due to change in mastership"
+               (assoc op :type type, :error :mastership-change)
 
-                 (throw e))))))
+               (throw e))))))
 
-       (teardown! [_ test])
+     (teardown! [_ test])
 
-       (close! [_ test]
-         (vc/close! conn))))))
+     (close! [_ test]
+       (vc/close! conn)))))
 
 (defn r   [_ _] {:type :invoke, :f :read, :value nil})
 (defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})
