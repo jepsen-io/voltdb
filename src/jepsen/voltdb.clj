@@ -275,7 +275,7 @@
         (start! test node)
 
         ; Wait for convergence
-        (jepsen/synchronize test)
+        (jepsen/synchronize test 240)
 
         ; Finish procedures
         @procedures
