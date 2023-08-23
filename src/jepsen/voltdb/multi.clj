@@ -33,20 +33,20 @@
       :system-count                 How many systems to preallocate
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
-  ([opts] (client nil opts nil))
-  ([node opts conn]
-   (let [initialized? (promise)]
-     (reify client/Client
-       (open! [_ test node]
-         (let [conn (vc/connect
-                      node (select-keys opts
-                                        [:procedure-call-timeout
-                                         :connection-response-timeout]))]
-           (client node opts conn)))
+  ([opts] (client nil (promise) opts nil))
+  ([node initialized? opts conn]
+   (reify client/Client
+     (open! [_ test node]
+       (let [conn (vc/connect
+                    node (select-keys opts
+                                      [:procedure-call-timeout
+                                       :connection-response-timeout]))]
+         (client node initialized? opts conn)))
 
-       (setup! [_ test]
-         (when (deliver initialized? true)
-           (c/on node
+     (setup! [_ test]
+       (when (deliver initialized? true)
+         (c/on node
+               (vc/with-race-retry
                  ; Create table
                  (voltdb/sql-cmd! "CREATE TABLE multi (
                                   system      INTEGER NOT NULL,
@@ -61,57 +61,57 @@
                  ; Create initial systems
                  (dotimes [i (:system-count opts)]
                    (doseq [k (:keys opts)]
-                     (vc/call! conn "MULTI.insert" i (name k) 0)))
-                 (info node "initial state populated"))))
+                     (vc/call! conn "MULTI.insert" i (name k) 0)))))
+         (info node "initial state populated")))
 
-       (invoke! [this test op]
-         (try
-           (case (:f op)
-             :txn (let [[system txn] (:value op)
-                        fs (->> txn
-                                (map first)
-                                (map name)
-                                (into-array String))
-                        ks (->> txn
-                                (map second)
-                                (map name)
-                                (into-array String))
-                        vs (->> txn
-                                (map #(or (nth % 2) -1)) ; gotta pick an int
-                                (into-array Integer/TYPE))
-                        res (-> conn
-                                (vc/call! "MultiTxn" system fs ks vs))
-                        ; Map results of reads back into read values
-                        txn' (mapv (fn [[f k v :as op] table]
-                                     (case f
-                                       :write op
-                                       :read  (->> table :rows first :VALUE
-                                                  (assoc op 2))))
-                                   txn
-                                   res)]
-                    (assoc op
-                           :type :ok
-                           :value (independent/tuple system txn'))))
-           (catch org.voltdb.client.NoConnectionsException e
-             (assoc op :type :fail, :error :no-conns))
-           (catch org.voltdb.client.ProcCallException e
-             (let [type (if (read-only? (val (:value op))) :fail :info)]
-               (condp re-find (.getMessage e)
-                 #"^No response received in the allotted time"
-                 (assoc op :type type, :error :timeout)
+     (invoke! [this test op]
+       (try
+         (case (:f op)
+           :txn (let [[system txn] (:value op)
+                      fs (->> txn
+                              (map first)
+                              (map name)
+                              (into-array String))
+                      ks (->> txn
+                              (map second)
+                              (map name)
+                              (into-array String))
+                      vs (->> txn
+                              (map #(or (nth % 2) -1)) ; gotta pick an int
+                              (into-array Integer/TYPE))
+                      res (-> conn
+                              (vc/call! "MultiTxn" system fs ks vs))
+                      ; Map results of reads back into read values
+                      txn' (mapv (fn [[f k v :as op] table]
+                                   (case f
+                                     :write op
+                                     :read  (->> table :rows first :VALUE
+                                                 (assoc op 2))))
+                                 txn
+                                 res)]
+                  (assoc op
+                         :type :ok
+                         :value (independent/tuple system txn'))))
+         (catch org.voltdb.client.NoConnectionsException e
+           (assoc op :type :fail, :error :no-conns))
+         (catch org.voltdb.client.ProcCallException e
+           (let [type (if (read-only? (val (:value op))) :fail :info)]
+             (condp re-find (.getMessage e)
+               #"^No response received in the allotted time"
+               (assoc op :type type, :error :timeout)
 
-                 #"^Connection to database host .+ was lost before a response"
-                 (assoc op :type type, :error :conn-lost)
+               #"^Connection to database host .+ was lost before a response"
+               (assoc op :type type, :error :conn-lost)
 
-                 #"^Transaction dropped due to change in mastership"
-                 (assoc op :type type, :error :mastership-change)
+               #"^Transaction dropped due to change in mastership"
+               (assoc op :type type, :error :mastership-change)
 
-                 (throw e))))))
+               (throw e))))))
 
-       (teardown! [_ test])
+     (teardown! [_ test])
 
-       (close! [_ test]
-         (vc/close! conn))))))
+     (close! [_ test]
+       (vc/close! conn)))))
 
 (defn op
   "An op is a tuple of [f k v] like [:read 0 nil], or [:write 2 3]"
@@ -170,9 +170,11 @@
                                               :system-count
                                               :procedure-call-timeout
                                               :connection-response-timeout])))
-             :model   (model/multi-register (zipmap ks (repeat 0)))
              :checker (checker/compose
-                        {:linear   (independent/checker checker/linearizable)
+                        {:linear   (independent/checker
+                                     (checker/linearizable
+                                       {:model (model/multi-register
+                                                 (zipmap ks (repeat 0)))}))
                          :timeline (independent/checker (timeline/html))
                          :perf     (checker/perf)})
              :nemesis (voltdb/general-nemesis)
