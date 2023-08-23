@@ -134,9 +134,14 @@
     ; Per Ruth, just being able to ask for SystemInformation should indicate
     ; the cluster is ready to use. We'll make sure we get at least one table
     ; back, just in case.
-    (let [overview (vc/call! conn "@SystemInformation" "OVERVIEW")]
-      (when (empty? overview)
-        (throw+ {:type ::empty-overview}))))
+    (await-fn (fn check-system-info []
+                (let [overview (vc/call! conn "@SystemInformation" "OVERVIEW")]
+                  (when (empty? overview)
+                    (throw+ {:type ::empty-overview}))))
+              {:log-message "Waiting for @SystemInformation"
+               :log-interval 10000
+               :retry-interval 1000
+               :timeout 240000}))
   (info node "started"))
 
 (defn await-rejoin
