@@ -32,69 +32,69 @@
 
 (defn client
   "A single-register client."
-  ([opts] (client opts nil nil))
-  ([opts node conn]
-   (let [initialized? (promise)]
-     (reify client/Client
-       (open! [_ test node]
-         (let [conn (vc/connect
-                      node
-                      (select-keys opts
-                                   [:procedure-call-timeout
-                                    :connection-response-timeout]))]
-           (client opts node conn)))
+  ([opts] (client opts (promise) nil nil))
+  ([opts initialized? node conn]
+   (reify client/Client
+     (open! [_ test node]
+       (let [conn (vc/connect
+                    node
+                    (select-keys opts
+                                 [:procedure-call-timeout
+                                  :connection-response-timeout]))]
+         (client opts initialized? node conn)))
 
-       (setup! [_ test]
+     (setup! [_ test]
+       (when (deliver initialized? true)
          (c/on node
-               (when (deliver initialized? true)
-                 ; Create table
+               ; Create table
+               (vc/with-race-retry
                  (voltdb/sql-cmd! "CREATE TABLE dirty_reads (
                                   id          INTEGER NOT NULL,
                                   PRIMARY KEY (id)
                                   );
                                   PARTITION TABLE dirty_reads ON COLUMN id;")
                  (voltdb/sql-cmd! "CREATE PROCEDURE FROM CLASS
-                                  jepsen.procedures.DirtyReadStrongRead;")
-                 (info node "table created"))))
+                                  jepsen.procedures.DirtyReadStrongRead;")))
+         (info node "table created")))
 
-       (invoke! [this test op]
-         (try
-           (case (:f op)
-             ; Race conditions ahoy, awful hack
-             :rejoin (if (vc/up? node)
-                       (assoc op :type :ok, :value :already-up)
-                       (do (c/on node (voltdb/rejoin! test node))
-                           (assoc op :type :ok, :value :rejoined)))
+     (invoke! [this test op]
+       (try
+         (case (:f op)
+           ; Race conditions ahoy, awful hack
+           :rejoin (if (vc/up? node)
+                     (assoc op :type :ok, :value :already-up)
+                     (do (c/on node (voltdb/rejoin! test node))
+                         (assoc op :type :ok, :value :rejoined)))
 
-             :read (let [v (->> (:value op)
-                                (vc/call! conn "DIRTY_READS.select")
-                                first
-                                :rows
-                                (map :ID)
-                                first)]
-                        (assoc op :type (if v :ok :fail), :value v))
+           :read (let [v (->> (:value op)
+                              (vc/call! conn "DIRTY_READS.select")
+                              first
+                              :rows
+                              (map :ID)
+                              first)]
+                   (assoc op :type (if v :ok :fail), :value v))
 
-             :write (do (vc/call! conn "DIRTY_READS.insert" (:value op))
-                        (assoc op :type :ok))
+           :write (do (vc/call! conn "DIRTY_READS.insert" (:value op))
+                      (assoc op :type :ok))
 
-             :strong-read (->> (vc/call! conn "DirtyReadStrongRead")
-                               first
-                               :rows
-                               (map :ID)
-                               (into (sorted-set))
-                               (assoc op :type :ok, :value)))
-           (catch org.voltdb.client.NoConnectionsException e
-             ; It'll take a few seconds to come back, might as well take a
-             ; breather
-             (Thread/sleep 1000)
-             (assoc op :type :fail, :error :no-conns))
-           (catch org.voltdb.client.ProcCallException e
-             (assoc op :type :info, :error (.getMessage e)))))
+           :strong-read (->> (vc/call! conn "DirtyReadStrongRead")
+                             first
+                             :rows
+                             (map :ID)
+                             (into (sorted-set))
+                             (assoc op :type :ok, :value)))
+         (catch org.voltdb.client.NoConnectionsException e
+           ; It'll take a few seconds to come back, might as well take a
+           ; breather
+           (Thread/sleep 1000)
+           (assoc op :type :fail, :error :no-conns))
+         (catch org.voltdb.client.ProcCallException e
+           (assoc op :type :info, :error (.getMessage e)))))
 
-       (teardown! [_ test])
+     (teardown! [_ test])
 
-       (close! [_ test]
-         (vc/close! conn))))))
+     (close! [_ test]
+       (vc/close! conn)))))
 
 (defn checker
   "Verifies that we never read an element from a transaction which did not
@@ -147,19 +147,21 @@
     (let [; Lazy initialization of in-flight vector once test is ready
           in-flight (or in-flight (vec (repeat (count (:nodes test)) 0)))
           ; Pick a free process
-          process (gen.context/some-free-process context)
-          thread  (gen.context/process->thread context process)
-          ; What number node is that?
-          n (mod process (count (:nodes test)))]
-      (if (= thread n)
-        ; The first node-count processes perform writes
-        (let [last-write' (inc last-write)
-              in-flight'  (assoc in-flight n last-write')]
-          [(gen/fill-in-op {:f :write, :value last-write'} context)
-           (RWGen. last-write' in-flight')])
-        ; Remaining processes try to read most recent writes
-        [(gen/fill-in-op {:f :read, :value (nth in-flight n)})
-         this]))))
+          process (gen.context/some-free-process context)]
+      (if (nil? process)
+        [:pending this]
+        (let [thread  (gen.context/process->thread context process)
+              ; What number node is that?
+              n (mod process (count (:nodes test)))]
+          (if (= thread n)
+            ; The first node-count processes perform writes
+            (let [last-write' (inc last-write)
+                  in-flight'  (assoc in-flight n last-write')]
+              [(gen/fill-in-op {:f :write, :value last-write'} context)
+               (RWGen. last-write' in-flight')])
+            ; Remaining processes try to read most recent writes
+            [(gen/fill-in-op {:f :read, :value (nth in-flight n)} context)
+             this]))))))
 
 (defn rw-gen
   "While one process writes to a node, we want another process to see that the
