@@ -95,6 +95,7 @@
         (c/cd base-dir
               (c/exec (str base-dir "/bin/voltdb") :init
               :--config (str base-dir "/deployment.xml")
+             
               | :tee (str base-dir "/log/stdout.log"))))
   (info node "initialized"))
 
@@ -233,7 +234,10 @@
   "Compiles and packages stored procedures in procedures/"
   []
   (sh "mkdir" "obj" :dir "procedures/")
-  (let [r (sh "bash" "-c" "javac -classpath \"./:./*\" -d ./obj *.java"
+  ; Volt currently plans on JDK8, and we're concerned that running on 17 might
+  ; be the cause of a bug. Just in case, we'll target compilation back to 11
+  ; (the oldest version you can install on Debian Bookworm easily)
+  (let [r (sh "bash" "-c" "javac -source 11 -target 11 -classpath \"./:./*\" -d ./obj *.java"
               :dir "procedures/")]
     (when-not (zero? (:exit r))
       (throw (RuntimeException. (str "STDOUT:\n" (:out r)
