@@ -6,20 +6,45 @@
             [clojure.string :as str]
             [clojure.java.io :as io]
             [jepsen [core :as jepsen]
-                    [cli :as cli]]
+                    [checker :as checker]
+                    [cli :as cli]
+                    [generator :as gen]
+                    [os :as os]
+                    [tests :as tests]]
+            [jepsen.checker.timeline :as timeline]
+            [jepsen.os.debian :as debian]
             [jepsen.voltdb :as voltdb]
             [jepsen.voltdb [dirty-read :as dirty-read]
                            [multi      :as multi]
+                           [nemesis    :as nemesis]
                            [single     :as single]
                            [redundant-register :as redundant-register]]))
 
 (def workloads
   "A map of workload names names to functions that take CLI options and return
   workload maps"
-  {:multi              multi/multi-test
-   :single             single/single-test
-   :dirty-read         dirty-read/dirty-read-test
-   :redundant-register redundant-register/rregister-test})
+  {:dirty-read         dirty-read/workload
+   :multi              multi/workload
+   :redundant-register redundant-register/workload
+   :single             single/workload})
+
+(def nemeses
+  "All nemesis faults we know about."
+  ; TODO: add pause, kill, rando, bitflip/truncate disk files, ...
+  #{:partition :clock})
+
+(def special-nemeses
+  "A map of special nemesis names to collections of faults."
+  {:none []
+   :all  [:partition :clock]})
+
+(defn parse-nemesis-spec
+  "Takes a comma-separated nemesis string and returns a collection of keyword
+  faults."
+  [spec]
+  (->> (str/split spec #",")
+       (map keyword)
+       (mapcat #(get special-nemeses % [%]))))
 
 (def opt-spec
   "Command line options for tools.cli"
@@ -32,9 +57,21 @@
     :parse-fn #(Long/parseLong %)
     :validate [pos? "Must be positive"]]
 
+   [nil "--nemesis FAULTS" "A comma-separated list of faults to inject."
+    :parse-fn parse-nemesis-spec
+    :validate [(partial every? (fn [nem]
+                                 (or (nemeses nem)
+                                     (special-nemeses nem))))
+               (cli/one-of (concat nemeses (keys special-nemeses)))]]
+
+   [nil "--nemesis-interval SECONDS" "How long between nemesis operations, on average, for each class of fault?"
+    :default  10
+    :parse-fn read-string
+    :validate [pos? "must be positive"]]
+
    [nil "--no-reads" "Disable reads, to test write safety only"]
 
-   ["-r" "--rate HZ" "Approximate number of requests per second. Note: many workloads currently hardcode their request rate."
+   ["-r" "--rate HZ" "Approximate number of requests per second, total"
     :default 100
     :parse-fn read-string
     :validate [#(and (number? %) (pos? %)) "must be a positive number"]]
@@ -66,8 +103,52 @@
   (let [workload-name (:workload opts)
         ; Right now workloads construct entire test maps. We'll refactor this
         ; in the next commit.
-        workload ((workloads workload-name) opts)]
-    workload))
+        workload ((workloads workload-name) opts)
+        db       (voltdb/db (:tarball opts) (:force-download opts))
+        nemesis (nemesis/nemesis-package
+                  {:db        db
+                   :nodes     (:nodes test)
+                   :faults    (:nemesis opts)
+                   ; TODO: add support for targeting primaries
+                   :partition {:targets [:majority :majorities-ring]}
+                   :pause     {:targets [:one :majority :all]}
+                   :kill      {:targets [:one :majority :all]}
+                   :interval  (:nemesis-interval opts)})
+        gen (->> (:generator workload)
+                 (gen/stagger (/ (:rate opts)))
+                 (gen/nemesis
+                   [(gen/sleep 5)
+                    (:generator nemesis)])
+                 (gen/time-limit (:time-limit opts)))
+        ; Is there a final generator for this workload?
+        gen (if-let [final (:final-generator workload)]
+              (gen/phases gen
+                          ; Recovery
+                          (gen/log "Recovering cluster")
+                          (gen/nemesis (:final-generator nemesis))
+                          (gen/log "Waiting for recovery")
+                          (gen/sleep 10)
+                          ; Final generators
+                          (gen/clients final))
+              ; No final generator
+              gen)]
+    (merge tests/noop-test
+           opts
+           {:name (str (name workload-name)
+                       " " (str/join "," (map name (:nemesis opts))))
+            :os        (if (:skip-os opts)
+                         os/noop
+                         (voltdb/os debian/os))
+            :generator gen
+            :client    (:client workload)
+            :nemesis   (:nemesis nemesis)
+            :db        db
+            :checker   (checker/compose
+                         {:perf       (checker/perf {:nemeses (:perf nemesis)})
+                          :clock      (checker/clock-plot)
+                          :stats      (checker/stats)
+                          :exceptions (checker/unhandled-exceptions)
+                          :workload   (:checker workload)})})))
 
 (defn -main
   "Main entry point for the CLI. Takes CLI options and runs tests, launches a

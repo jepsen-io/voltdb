@@ -153,44 +153,33 @@
      :f     :txn
      :value (mapv (fn [k] [:read k nil]) ks)}))
 
-(defn multi-test
-  "Special options, in addition to voltdb/base-test:
+(defn workload
+  "Takes CLI options and constructs a workload map. Special options:
 
-      :time-limit                   How long should we run the test for?
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
-  (let [ks [:x :y]
-        system-count 1000]
-    (voltdb/base-test
-      (assoc opts
-             :name    "voltdb multi"
-             :client  (client (merge
-                                {:keys         ks
-                                 :system-count system-count}
-                                (select-keys opts
-                                             [:keys
-                                              :system-count
-                                              :procedure-call-timeout
-                                              :connection-response-timeout])))
-             :checker (checker/compose
-                        {:linear   (independent/checker
-                                     (checker/linearizable
-                                       {:model (model/multi-register
-                                                 (zipmap ks (repeat 0)))}))
-                         :timeline (independent/checker (timeline/html))
-                         :perf     (checker/perf)})
-             :nemesis (voltdb/general-nemesis)
-             :recovery-delay (:recovery-delay opts 30)
-             :concurrency 100
-             ; {:f :txn, :value [system-number [[:read 2 nil] [:write 3 1]]]}
-             :generator (->> (independent/concurrent-generator
-                               10
-                               (range)
-                               (fn [id]
-                                 (->> (txn-gen ks)
-                                      (gen/stagger 5)
-                                      (gen/reserve 5 (read-only-txn-gen ks))
-                                      (gen/stagger 1)
-                                      (gen/time-limit 120))))
-                             (voltdb/general-gen opts))))))
+  (let [ks           [:x :y]
+        system-count 1000
+        n            (count (:nodes opts))]
+    {:client  (client (merge
+                        {:keys         ks
+                         :system-count system-count}
+                        (select-keys opts
+                                     [:keys
+                                      :system-count
+                                      :procedure-call-timeout
+                                      :connection-response-timeout])))
+     :checker (checker/compose
+                {:linear   (independent/checker
+                             (checker/linearizable
+                               {:model (model/multi-register
+                                         (zipmap ks (repeat 0)))}))
+                 :timeline (independent/checker (timeline/html))})
+     :generator (independent/concurrent-generator
+                  (* 2 n)
+                  (range)
+                  (fn per-key [id]
+                    (->> (txn-gen ks)
+                         (gen/reserve n (read-only-txn-gen ks))
+                         (gen/limit 150))))}))

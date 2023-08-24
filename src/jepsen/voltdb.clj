@@ -11,7 +11,6 @@
              [os           :as os]
              [tests        :as tests]
              [util         :as util :refer [await-fn meh timeout]]]
-            [jepsen.os            :as os]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
             [jepsen.control.net   :as cn]
@@ -484,19 +483,6 @@
        (gen/sleep (or recovery-delay 0))
        {:type :info, :f :recover, :value nil}])))
 
-(defn general-gen
-  "Emits a random mixture of partitions, node failures/rejoins, and recoveries,
-  for (:time-limit test) seconds. Allocates one process as a rando. Wraps an
-  underlying client generator."
-  [opts gen]
-  (->> gen
-       (gen/nemesis nil)
-       ;(gen/nemesis
-       ; (gen/phases
-       ;  (gen/sleep 5)
-       ;  (isolate-thirst-kill-gen (:recovery-delay opts))))
-       (gen/time-limit (:time-limit opts))))
-
 (defn final-recovery
   "A generator which emits a :stop, followed by a :recover, for the nemesis,
   then sleeps to allow clients to reconnect."
@@ -506,16 +492,3 @@
    (gen/nemesis {:type :info, :f :recover})
    (gen/log "Waiting for reconnects")
    (gen/sleep 10)))
-
-(defn base-test
-  "Constructs a basic test case with common options.
-
-        :tarball                      URL to an enterprise voltdb tarball
-        :skip-os                      Skip OS setup
-        :force-download               Always download tarball URL
-        :nodes                        Nodes to run against"
-  [opts]
-  (-> tests/noop-test
-      (assoc :os (if (:skip-os opts) os/noop (os debian/os)))
-      (assoc :db (db (:tarball opts) (:force-download opts)))
-      (merge opts)))

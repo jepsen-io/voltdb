@@ -82,31 +82,16 @@
         {:valid? (empty? mixed-reads)
          :mixed-reads mixed-reads}))))
 
-(defn rregister-test
-  "Takes command line options and returns a workload for testing redundant
-  registers, to be merged into a test map."
+(defn workload
+  "Takes CLI options and returns a workload for testing redundant registers, to
+  be merged into a test map."
   [opts]
-  (let [n 5]
-    (voltdb/base-test
-      (assoc opts
-             :name    "voltdb redundant-register"
-             :client  (client n)
-             :checker (checker/compose
-                        {:atomic (independent/checker (atomic-checker n))
-                         :perf   (checker/perf)})
-             :nemesis (voltdb/general-nemesis)
-             :concurrency 100
-             :generator (->> (independent/concurrent-generator
-                               10
+  (let [n (count (:nodes opts))]
+    {:client   (client n)
+     :checker   (independent/checker (atomic-checker n))
+     :generator (independent/concurrent-generator
+                               (* 2 n)
                                (range)
                                (fn [id]
                                  (->> w
-                                      (gen/reserve 5 r)
-                                      (gen/delay 1/100)
-                                      (gen/time-limit 30))))
-                             (gen/nemesis
-                               (cycle [(gen/sleep 30)
-                                       {:type :info :f :start}
-                                       (gen/sleep 30)
-                                       {:type :info :f :stop}]))
-                             (voltdb/general-gen opts))))))
+                                      (gen/reserve n r))))}))

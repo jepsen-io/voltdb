@@ -114,39 +114,31 @@
 (defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})
 (defn cas [_ _] {:type :invoke, :f :cas, :value [(rand-int 5) (rand-int 5)]})
 
-(defn single-test
-  "Special options, in addition to voltdb/base-test:
+(defn workload
+  "Takes CLI options and constructs a workload map. Special options
 
-      :time-limit                   How long should we run the test for?
       :strong-reads                 Whether to perform normal or strong selects
       :no-reads                     Don't bother with reads at all
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
-  (voltdb/base-test
-    (assoc opts
-           :name    "voltdb single"
-           :client  (client (select-keys opts [:strong-reads
-                                               :procedure-call-timeout
-                                               :connection-response-timeout]))
-           :checker (checker/compose
-                      {:linear   (independent/checker
-                                  (checker/linearizable
-                                   {:model (model/cas-register nil)}))
-                       :global-timeline (timeline/html)
-                       :timeline (independent/checker (timeline/html))
-                       :perf     (checker/perf)})
-           :nemesis (voltdb/general-nemesis)
-           :concurrency 100
-           :generator (->> (independent/concurrent-generator
-                             10
-                             (range)
-                             (fn [id]
-                               (->> (gen/mix [w cas])
-                                    (gen/stagger 2)
-                                    (gen/reserve 5 (if (:no-reads opts)
-                                                     (gen/stagger 2 cas)
-                                                     r))
-                                    (gen/stagger 1/2)
-                                    (gen/time-limit 60))))
-                           (voltdb/general-gen opts)))))
+  (let [n (count (:nodes opts))]
+    {:client  (client (select-keys opts [:strong-reads
+                                         :procedure-call-timeout
+                                         :connection-response-timeout]))
+     :checker (checker/compose
+                {:linear   (independent/checker
+                             (checker/linearizable
+                               {:model (model/cas-register nil)}))
+                 :timeline (independent/checker (timeline/html))})
+     :generator (independent/concurrent-generator
+                  (* 2 n)
+                  (range)
+                  (fn per-key [id]
+                    ; First n processes do writes/cas, the others do reads
+                    ; (or cas, if no-reads is true).
+                    (->> (gen/mix [w cas])
+                         (gen/reserve n (if (:no-reads opts)
+                                          (gen/stagger 2 cas)
+                                          r))
+                         (gen/limit 150))))}))
