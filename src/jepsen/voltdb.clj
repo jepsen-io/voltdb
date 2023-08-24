@@ -511,11 +511,11 @@
   "Constructs a basic test case with common options.
 
         :tarball                      URL to an enterprise voltdb tarball
-        :skip-os?                     Skip OS setup
-        :force-download?              Always download tarball URL
+        :skip-os                      Skip OS setup
+        :force-download               Always download tarball URL
         :nodes                        Nodes to run against"
   [opts]
   (-> tests/noop-test
-      (assoc :os (if (:skip-os? opts) os/noop (os debian/os)))
-      (assoc :db (db (:tarball opts) (:force-download? opts)))
+      (assoc :os (if (:skip-os opts) os/noop (os debian/os)))
+      (assoc :db (db (:tarball opts) (:force-download opts)))
       (merge opts)))

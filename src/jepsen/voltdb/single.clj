@@ -23,7 +23,7 @@
 (defn client
   "A single-register client. Options:
 
-      :strong-reads?                 Whether to perform normal or strong selects
+      :strong-reads                 Whether to perform normal or strong selects
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   ([opts] (client nil nil (promise) opts))
@@ -65,7 +65,7 @@
          (let [id     (key (:value op))
                value  (val (:value op))]
            (case (:f op)
-             :read   (let [proc (if (:strong-reads? opts)
+             :read   (let [proc (if (:strong-reads opts)
                                   "SRegisterStrongRead"
                                   "REGISTERS.select")
                            v (-> conn
@@ -118,15 +118,15 @@
   "Special options, in addition to voltdb/base-test:
 
       :time-limit                   How long should we run the test for?
-      :strong-reads?                Whether to perform normal or strong selects
-      :no-reads?                    Don't bother with reads at all
+      :strong-reads                 Whether to perform normal or strong selects
+      :no-reads                     Don't bother with reads at all
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
   (voltdb/base-test
     (assoc opts
            :name    "voltdb single"
-           :client  (client (select-keys opts [:strong-reads?
+           :client  (client (select-keys opts [:strong-reads
                                                :procedure-call-timeout
                                                :connection-response-timeout]))
            :checker (checker/compose
@@ -144,7 +144,7 @@
                              (fn [id]
                                (->> (gen/mix [w cas])
                                     (gen/stagger 2)
-                                    (gen/reserve 5 (if (:no-reads? opts)
+                                    (gen/reserve 5 (if (:no-reads opts)
                                                      (gen/stagger 2 cas)
                                                      r))
                                     (gen/stagger 1/2)

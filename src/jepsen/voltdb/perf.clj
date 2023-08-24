@@ -1,6 +1,8 @@
 (ns jepsen.voltdb.perf
   "Performance benchmarks for single and multi transactions, with a mixed
-  read-write fixed-concurrency workload, over varying node count."
+  read-write fixed-concurrency workload, over varying node count. This is
+  currently marooned--it was an experiment during the 2016 Jepsen tests, but
+  isn't hooked up to the CLI."
   (:require [jepsen [core           :as jepsen]
                     [control        :as c :refer [|]]
                     [checker        :as checker]
@@ -25,17 +27,17 @@
 (defn single-perf-test
   "Special options, in addition to voltdb/base-test:
 
-      :strong-reads?                Whether to perform normal or strong selects
-      :no-reads?                    Don't bother with reads at all
+      :strong-reads                 Whether to perform normal or strong selects
+      :no-reads                     Don't bother with reads at all
       :procedure-call-timeout       How long in ms to wait for proc calls
       :connection-response-timeout  How long in ms to wait for connections"
   [opts]
   (voltdb/base-test
     (assoc opts
            :name    (str "voltdb perf single " (count (:nodes opts)))
-           :client  (single/client (select-keys opts [:strong-reads?
-                                               :procedure-call-timeout
-                                               :connection-response-timeout]))
+           :client  (single/client (select-keys opts [:strong-reads
+                                                      :procedure-call-timeout
+                                                      :connection-response-timeout]))
            :model   (model/cas-register nil)
            :checker (checker/perf)
            :concurrency 160
