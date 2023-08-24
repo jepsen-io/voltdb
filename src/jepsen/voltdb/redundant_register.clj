@@ -60,14 +60,7 @@
      (teardown! [_ test])
 
      (close! [_ test]
-       (vc/close! conn))
-
-     client/Reusable
-     (reusable? [_ test]
-       ; I'm not entirely sure whether this IS safe or not, but reopening
-       ; clients is blowing out the maximum thread count in just a few minutes.
-       ; Let's try it and see. --KRK 2023
-       true))))
+       (vc/close! conn)))))
 
 (defn r   [_ _] {:type :invoke, :f :read, :value nil})
 (defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})

@@ -65,6 +65,7 @@
          (info node "initial state populated")))
 
      (invoke! [this test op]
+     ; {:type :invoke, :f :txn, :value [0 [[:read 1 nil] [:write 2 3]]]}
        (try
          (case (:f op)
            :txn (let [[system txn] (:value op)
@@ -91,7 +92,9 @@
                                  res)]
                   (assoc op
                          :type :ok
-                         :value (independent/tuple system txn'))))
+                         :value (independent/tuple system txn'))))    
+         ; {:type :ok, :f :txn, :value [0 [[:read 1 4] [:write 2 3]]]}
+
          (catch org.voltdb.client.NoConnectionsException e
            (assoc op :type :fail, :error :no-conns))
          (catch org.voltdb.client.ProcCallException e
@@ -180,6 +183,7 @@
              :nemesis (voltdb/general-nemesis)
              :recovery-delay (:recovery-delay opts 30)
              :concurrency 100
+             ; {:f :txn, :value [system-number [[:read 2 nil] [:write 3 1]]]}
              :generator (->> (independent/concurrent-generator
                                10
                                (range)

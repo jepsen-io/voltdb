@@ -88,9 +88,9 @@
                                   :modified_tuples)]
                       (assert (#{0 1} res))
                       (assoc op :type (if (zero? res) :fail :ok)))))
-         (catch org.voltdb.client.NoConnectionsException e
-           (Thread/sleep 1000)
-           (assoc op :type :fail, :error :no-conns))
+         ;(catch org.voltdb.client.NoConnectionsException e
+         ;  (Thread/sleep 1000)
+         ;  (assoc op :type :fail, :error :no-conns))
          (catch org.voltdb.client.ProcCallException e
            (let [type (if (= :read (:f op)) :fail :info)]
              (condp re-find (.getMessage e)
@@ -131,8 +131,9 @@
                                                :connection-response-timeout]))
            :checker (checker/compose
                       {:linear   (independent/checker
-                                   (checker/linearizable
-                                     {:model (model/cas-register nil)}))
+                                  (checker/linearizable
+                                   {:model (model/cas-register nil)}))
+                       :global-timeline (timeline/html)
                        :timeline (independent/checker (timeline/html))
                        :perf     (checker/perf)})
            :nemesis (voltdb/general-nemesis)

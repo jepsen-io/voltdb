@@ -1,19 +1,20 @@
 (ns jepsen.voltdb
   (:require [jepsen [core         :as jepsen]
-                    [db           :as db]
-                    [control      :as c :refer [|]]
-                    [checker      :as checker]
-                    [client       :as client]
-                    [generator    :as gen]
-                    [independent  :as independent]
-                    [nemesis      :as nemesis]
-                    [net          :as net]
-                    [os           :as os]
-                    [tests        :as tests]
-                    [util         :as util :refer [await-fn meh timeout]]]
+             [db           :as db]
+             [control      :as c :refer [|]]
+             [checker      :as checker]
+             [client       :as client]
+             [generator    :as gen]
+             [independent  :as independent]
+             [nemesis      :as nemesis]
+             [net          :as net]
+             [os           :as os]
+             [tests        :as tests]
+             [util         :as util :refer [await-fn meh timeout]]]
             [jepsen.os            :as os]
             [jepsen.os.debian     :as debian]
             [jepsen.control.util  :as cu]
+            [jepsen.control.net   :as cn]
             [jepsen.voltdb.client :as vc]
             [knossos.model        :as model]
             [clojure.data.xml     :as xml]
@@ -42,9 +43,9 @@
   (reify os/OS
     (setup! [_ test node]
       (os/setup! os test node)
-      (debian/install ["python2.7" "openjdk-17-jdk-headless"])
+      (debian/install ["python3" "openjdk-17-jdk-headless"])
       (c/exec :update-alternatives :--install "/usr/bin/python" "python"
-              "/usr/bin/python2.7" 1))
+              "/usr/bin/python3" 1))
 
     (teardown! [_ test node]
       (os/teardown! os test node))))
@@ -53,71 +54,71 @@
   "Install the given tarball URL"
   [node url force?]
   (c/su
-    (if-let [[m path _ filename] (re-find #"^file://((.*/)?([^/]+))$" url)]
-      (do ; We're installing a local tarball from the control node; upload it.
-          (c/exec :mkdir :-p "/tmp/jepsen")
-          (let [remote-path (str "/tmp/jepsen/" filename)]
-            (c/upload path remote-path)
-            (cu/install-archive! (str "file://" remote-path)
-                                 base-dir {:force? force?})))
+   (if-let [[m path _ filename] (re-find #"^file://((.*/)?([^/]+))$" url)]
+     (do ; We're installing a local tarball from the control node; upload it.
+       (c/exec :mkdir :-p "/tmp/jepsen")
+       (let [remote-path (str "/tmp/jepsen/" filename)]
+         (c/upload path remote-path)
+         (cu/install-archive! (str "file://" remote-path)
+                              base-dir {:force? force?})))
       ; Probably an HTTP URI; just let install-archive handle it
-      (cu/install-archive! url base-dir {:force? force?}))
-    (c/exec :mkdir (str base-dir "/log"))
-    (cu/ensure-user! username)
-    (c/exec :chown :-R (str username ":" username) base-dir)
-    (info "VoltDB unpacked")))
+     (cu/install-archive! url base-dir {:force? force?}))
+   (c/exec :mkdir (str base-dir "/log"))
+   (cu/ensure-user! username)
+   (c/exec :chown :-R (str username ":" username) base-dir)
+   (info "VoltDB unpacked")))
 
 (defn deployment-xml
   "Generate a deployment.xml string for the given test."
   [test]
   (xml/emit-str
-    (xml/sexp-as-element
-      [:deployment {}
-       [:cluster {:hostcount (count (:nodes test))
+   (xml/sexp-as-element
+    [:deployment {}
+     [:cluster {:hostcount (count (:nodes test))
 ;                  :sitesperhost 2
-                  :kfactor (min 4 (dec (count (:nodes test))))}]
-       [:paths {}
-        [:voltdbroot {:path base-dir}]]
+                :kfactor (min 4 (dec (count (:nodes test))))}]
+     [:paths {}
+      [:voltdbroot {:path base-dir}]]
        ; We need to choose a heartbeat high enough so that we can spam
        ; isolated nodes with requests *before* they kill themselves
        ; but low enough that a new majority is elected and performs
        ; some operations.
-       [:heartbeat {:timeout 2}] ; seconds
+     [:heartbeat {:timeout 2}] ; seconds
        ; TODO: consider changing commandlog enabled to false to speed up startup
-       [:commandlog {:enabled true, :synchronous true, :logsize 128}
-        [:frequency {:time 2}]]]))) ; milliseconds
+     [:commandlog {:enabled true, :synchronous true, :logsize 128}
+      [:frequency {:time 2}]]]))) ; milliseconds
 
 (defn init-db!
   "run voltdb init"
   [node]
   (info "Initializing voltdb")
   (c/sudo username
-        (c/cd base-dir
+          (c/cd base-dir
               ; We think there's a bug that breaks sqlcmd if it runs early in
               ; the creation of a fresh DB--it'll log "Cannot invoke
               ; java.util.Map.values() because arglists is null". To work
               ; around that, we're creating a table so the schema is nonempty.
-              (let [init-schema "CREATE TABLE work_around_volt_bug (
+                (let [init-schema "CREATE TABLE work_around_volt_bug (
                                  id int not null
                                  );"
-                    init-schema-file "init-schema"]
-              (cu/write-file! init-schema init-schema-file)
-              (c/exec (str base-dir "/bin/voltdb")
-                      :init
-                      :-s init-schema-file
-                      :--config (str base-dir "/deployment.xml")
-                      | :tee (str base-dir "/log/stdout.log")))))
+                      init-schema-file "init-schema"]
+                  (cu/write-file! init-schema init-schema-file)
+                  (c/exec (str base-dir "/bin/voltdb")
+                          :init
+                          :-s init-schema-file
+                          :--config (str base-dir "/deployment.xml")
+                          | :tee (str base-dir "/log/stdout.log")))))
   (info node "initialized"))
 
 (defn configure!
   "Prepares config files and creates fresh DB."
   [test node]
   (c/sudo username
-    (c/cd base-dir
-          (c/upload (:license test) (str base-dir "/license.xml"))
-          (cu/write-file! (deployment-xml test) "deployment.xml")
-          (init-db! node)
-          (c/exec :ln :-f :-s (str base-dir "/voltdbroot/log/volt.log") (str base-dir "/log/volt.log" )))))
+          (c/cd base-dir
+                (c/upload (:license test) (str base-dir "/license.xml"))
+                (cu/write-file! (deployment-xml test) "deployment.xml")
+                (init-db! node)
+                (c/exec :ln :-f :-s (str base-dir "/voltdbroot/log/volt.log") (str base-dir "/log/volt.log")))))
 
 (defn await-log
   "Blocks until voltdb.log contains the given string."
@@ -177,12 +178,8 @@
                                   ; for joining a specific node with --host?
                                   ; Should that still be the case, or is that
                                   ; obsolete? --KRK 2023
-                                  :--count (str 5)
-                                  :--host (str "n1,n2,n3,n4,n5")
-                )
-            )
-  )
-)
+                                  :--count (count (:nodes test))
+                                  :--host (str/join "," (map cn/ip (:nodes test)))))))
 
 (defn start!
   "Starts voltdb, creating a fresh DB"
@@ -203,6 +200,7 @@
   "Rejoins a voltdb node. Serialized to work around a bug in voltdb where
   multiple rejoins can take down cluster nodes."
   [test node]
+  ; This bug has been fixed, so we probably don't need to lock here - KRK 2023
   (locking rejoin!
     (info "rejoining" node)
     (start-daemon! test :start (rand-nth (vc/up-nodes test)))
@@ -212,7 +210,7 @@
   "Stops voltdb"
   [test node]
   (c/su
-    (cu/stop-daemon! (str base-dir "/pidfile"))))
+   (cu/stop-daemon! (str base-dir "/pidfile"))))
 
 (defn stop-recover!
   "Stops all nodes, then recovers all nodes. Useful when Volt's lost majority
@@ -299,13 +297,14 @@
     (teardown! [_ test node]
       (stop! test node)
       (c/su
-        (c/exec :rm :-rf (c/lit (str base-dir "/*"))))
+       (c/exec :rm :-rf (c/lit (str base-dir "/*"))))
       (vc/kill-reconnect-threads!))
 
     db/LogFiles
     (log-files [db test node]
       [(str base-dir "/log/stdout.log")
-       (str base-dir "/log/volt.log")])))
+       (str base-dir "/log/volt.log")
+       (str base-dir "/deployment.xml")])))
 
 ;; Nemeses
 
@@ -341,8 +340,8 @@
     (invoke! [this test op]
       (case (:f op)
         :start (let [grudge (nemesis/complete-grudge
-                              [(:value op)
-                               (remove (set (:value op)) (:nodes test))])]
+                             [(:value op)
+                              (remove (set (:value op)) (:nodes test))])]
                  (net/drop-all! test grudge)
                  (assoc op :value [:partitioned grudge]))
         :stop (do (net/heal! (:net test) test)
@@ -404,20 +403,20 @@
                  ; out. If we go too slow we won't get a long enough log.
                  (Thread/sleep 1)
                  (vc/async-call!
-                   conn "MENTIONS.insert" i (rand-int 1000)
-                   (fn [^ClientResponse res]
-                     (when (or (= ClientResponse/SUCCESS (.getStatus res))
+                  conn "MENTIONS.insert" i (rand-int 1000)
+                  (fn [^ClientResponse res]
+                    (when (or (= ClientResponse/SUCCESS (.getStatus res))
                                ; not sure why this happens but it's ok?
-                               (= ClientResponse/UNINITIALIZED_APP_STATUS_CODE
-                                  (.getStatus res)))
-                       (->> res
-                            .getResults
-                            (map vc/volt-table->map)
-                            first
-                            :rows
-                            first
-                            :modified_tuples
-                            (swap! writes +))))))
+                              (= ClientResponse/UNINITIALIZED_APP_STATUS_CODE
+                                 (.getStatus res)))
+                      (->> res
+                           .getResults
+                           (map vc/volt-table->map)
+                           first
+                           :rows
+                           first
+                           :modified_tuples
+                           (swap! writes +))))))
                (catch Exception e
                  (info "Rando nemesis finished with" (.getMessage e)))
                (finally
@@ -432,12 +431,12 @@
   isolated+kill/rejoins, and random operations."
   []
   (nemesis/compose
-    {#{:recover}        (recover-nemesis)
-     #{:rando}          (rando-nemesis)
-     {:isolate :start
-      :heal    :stop}   (isolator-nemesis)
-     {:kill    :start
-      :rejoin  :stop}   (killer-nemesis)}))
+   {#{:recover}        (recover-nemesis)
+    #{:rando}          (rando-nemesis)
+    {:isolate :start
+     :heal    :stop}   (isolator-nemesis)
+    {:kill    :start
+     :rejoin  :stop}   (killer-nemesis)}))
 
 ;; Generators
 
@@ -479,8 +478,8 @@
     (let [minority (random-minority (:nodes test))]
       ; TODO: This is what was written in the code, but I think it's actually
       ; wrong: we want to isolate *then* rando, right? -KRK 2023
-      [{:type :info, :f :rando, :value minority}
-       {:type :info, :f :isolate, :value minority}
+      [{:type :info, :f :isolate, :value minority}
+       {:type :info, :f :rando, :value minority}
        ; TODO: Is this supposed to sleep before recovery or after? -KRK 2023
        (gen/sleep (or recovery-delay 0))
        {:type :info, :f :recover, :value nil}])))
@@ -491,10 +490,11 @@
   underlying client generator."
   [opts gen]
   (->> gen
-       (gen/nemesis
-         (gen/phases
-           (gen/sleep 5)
-           (isolate-thirst-kill-gen (:recovery-delay opts))))
+       (gen/nemesis nil)
+       ;(gen/nemesis
+       ; (gen/phases
+       ;  (gen/sleep 5)
+       ;  (isolate-thirst-kill-gen (:recovery-delay opts))))
        (gen/time-limit (:time-limit opts))))
 
 (defn final-recovery
@@ -502,10 +502,10 @@
   then sleeps to allow clients to reconnect."
   []
   (gen/phases
-    (gen/log "Recovering cluster")
-    (gen/nemesis {:type :info, :f :recover})
-    (gen/log "Waiting for reconnects")
-    (gen/sleep 10)))
+   (gen/log "Recovering cluster")
+   (gen/nemesis {:type :info, :f :recover})
+   (gen/log "Waiting for reconnects")
+   (gen/sleep 10)))
 
 (defn base-test
   "Constructs a basic test case with common options.
