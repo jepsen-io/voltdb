@@ -39,10 +39,11 @@
    :all  [:partition :clock]})
 
 (def all-nemeses
-  "Combinations of nemeses we choose for test-all"
-  [[:pause]
+  "Combinations of nemeses we run through for test-all"
+  [[]
    [:kill]
    [:partition]
+   [:pause]
    [:clock]
    [:kill :partition]])
 
@@ -108,7 +109,6 @@
                "Must be a file://, http://, or https:// URL including .tar"]]
 
    ["-w" "--workload NAME" "What workload should we run?"
-    :default :single
     :parse-fn keyword
     :validate [workloads (cli/one-of workloads)]]])
 
@@ -165,11 +165,21 @@
                           :exceptions (checker/unhandled-exceptions)
                           :workload   (:checker workload)})})))
 
+(defn all-tests
+  "Turns CLI options into a sequence of tests to perform."
+  [opts]
+  (let [nemeses   (if-let [n (:nemesis opts)]  [n] all-nemeses)
+        workloads (if-let [w (:workload opts)] [w] (keys workloads))]
+    (for [n nemeses, w workloads, i (range (:test-count opts))]
+      (voltdb-test (assoc opts :workload w, :nemesis n)))))
+
 (defn -main
   "Main entry point for the CLI. Takes CLI options and runs tests, launches a
   web server, analyzes results, etc."
   [& args]
   (cli/run! (merge (cli/single-test-cmd {:test-fn voltdb-test
                                          :opt-spec opt-spec})
+                   (cli/test-all-cmd {:tests-fn all-tests
+                                      :opt-spec opt-spec})
                    (cli/serve-cmd))
             args))
