@@ -61,19 +61,19 @@
   ([node opts]
    (let [opts (merge {:procedure-call-timeout 100
                       :connection-response-timeout 1000}
-                     opts)]
-     (-> (doto (ClientConfig. "" "")
-           ; TODO: is reconnection even something you can disable any more?
-           ; https://docs.voltdb.com/javadoc/java-client-api/org/voltdb/client/ClientConfig.html
-           ; makes it seem like maybe no? -KRK 2023
-           ; (.setReconnectOnConnectionLoss (get opts :reconnect? true))
-           ; We don't want to try and connect to all nodes
-           (.setTopologyChangeAware false)
-           (.setProcedureCallTimeout (:procedure-call-timeout opts))
-           (.setConnectionResponseTimeout (:connection-response-timeout opts)))
-         (ClientFactory/createClient)
-         (doto
-           (.createConnection (name node)))))))
+                     opts)
+         config (doto (ClientConfig. "" "")
+                  ; We don't want to try and connect to all nodes
+                  (.setTopologyChangeAware false)
+                  (.setProcedureCallTimeout (:procedure-call-timeout opts))
+                  (.setConnectionResponseTimeout (:connection-response-timeout opts)))
+         client (ClientFactory/createClient config)]
+     (try
+       (.createConnection client (name node))
+       client
+       (catch Throwable t
+         (.close client)
+         (throw t))))))
 
 (defn volt-table->map
   "Converts a VoltDB table to a data structure like

@@ -60,7 +60,7 @@
          (info node "table created")))
 
      (invoke! [this test op]
-       (info "Process " (:process op) "using node" node)
+       ;(info "Process " (:process op) "using node" node)
        (try
          (let [id     (key (:value op))
                value  (val (:value op))]
