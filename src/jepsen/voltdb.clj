@@ -163,37 +163,25 @@
   (info node "rejoined"))
 
 (defn start-daemon!
-  "Starts the daemon with the given command."
-  [test cmd host]
+  "Starts the VoltDB daemon."
+  [test]
   (c/sudo username
           (c/cd base-dir
+                (info "Starting voltdb")
                 (cu/start-daemon! {:logfile (str base-dir "/log/stdout.log")
                                    :pidfile (str base-dir "/pidfile")
                                    :chdir   base-dir}
                                   (str base-dir "/bin/voltdb")
-                                  cmd
-                                  ; TODO: These shouldn't be hardcoded--also,
-                                  ; didn't we have an explicit rejoin procedure
-                                  ; for joining a specific node with --host?
-                                  ; Should that still be the case, or is that
-                                  ; obsolete? --KRK 2023
+                                  :start
                                   :--count (count (:nodes test))
-                                  :--host (str/join "," (map cn/ip (:nodes test)))))))
-
-(defn start!
-  "Starts voltdb, creating a fresh DB"
-  [test node]
-  (start-daemon! test :start (jepsen/primary test))
-  (await-start node))
+                                  :--host (->> (:nodes test)
+                                               (map cn/ip)
+                                               (str/join ","))))))
 
 (defn recover!
-  "Recovers an entire cluster, or with a node, a single node."
-  ([test]
-   (c/on-nodes test recover!))
-  ([test node]
-   (info "recovering" node)
-   (start-daemon! test :start (jepsen/primary test))
-   (await-start node)))
+  "Restarts all nodes in the test."
+  [test]
+  (c/on-nodes test (partial db/start! (:db test))))
 
 (defn rejoin!
   "Rejoins a voltdb node. Serialized to work around a bug in voltdb where
@@ -202,21 +190,15 @@
   ; This bug has been fixed, so we probably don't need to lock here - KRK 2023
   (locking rejoin!
     (info "rejoining" node)
-    (start-daemon! test :start (rand-nth (vc/up-nodes test)))
+    (db/start! (:db test) test node)
     (await-rejoin node)))
-
-(defn stop!
-  "Stops voltdb"
-  [test node]
-  (c/su
-   (cu/stop-daemon! (str base-dir "/pidfile"))))
 
 (defn stop-recover!
   "Stops all nodes, then recovers all nodes. Useful when Volt's lost majority
   and nodes kill themselves."
   ([test]
-   (c/on-nodes test stop!)
-   (c/on-nodes test recover!)))
+   (c/on-nodes test (partial db/kill! (:db test)))
+   (recover! test)))
 
 (defn sql-cmd!
   "Takes an SQL query and runs it on the local node via sqlcmd"
@@ -272,7 +254,7 @@
   "VoltDB around the given package tarball URL"
   [url force-download?]
   (reify db/DB
-    (setup! [_ test node]
+    (setup! [this test node]
       ; Download and unpack
       (install! node url force-download?)
 
@@ -283,7 +265,7 @@
                                  (upload-stored-procedures! node)))]
         ; Boot
         (configure! test node)
-        (start! test node)
+        (db/start! this test node)
 
         ; Wait for convergence
         (jepsen/synchronize test 240)
@@ -293,8 +275,8 @@
         (when (= node (jepsen/primary test))
           (load-stored-procedures! node))))
 
-    (teardown! [_ test node]
-      (stop! test node)
+    (teardown! [this test node]
+      (db/kill! this test node)
       (c/su
        (c/exec :rm :-rf (c/lit (str base-dir "/*"))))
       (vc/kill-reconnect-threads!))
@@ -303,29 +285,27 @@
     (log-files [db test node]
       [(str base-dir "/log/stdout.log")
        (str base-dir "/log/volt.log")
-       (str base-dir "/deployment.xml")])))
+       (str base-dir "/deployment.xml")])
+
+    db/Kill
+    (kill! [this test node]
+      (c/su
+        (cu/stop-daemon! (str base-dir "/pidfile"))))
+
+    (start! [this test node]
+      (start-daemon! test)
+      (await-start node))
+
+    db/Pause
+    (pause! [this test node]
+      ; TODO: target volt specifically
+      (c/su (cu/grepkill! :stop "java")))
+
+    (resume! [this test node]
+      ; TODO: target volt specifically
+      (c/su (cu/grepkill! :cont "java")))))
 
 ;; Nemeses
-
-(defn killer-nemesis
-  "A nemesis which kills the given collection of nodes on :start, and rejoins
-  them on :stop."
-  []
-  (reify nemesis/Nemesis
-    (setup! [this test] this)
-
-    (invoke! [this test op]
-      (case (:f op)
-        :start (do (dorun (util/real-pmap (partial stop! test) (:value op)))
-                   [:killed (:value op)])
-        :stop  (->> (:value op)
-                    (map (fn [node]
-                           [node (if (vc/up? node)
-                                   :already-up
-                                   (do (rejoin! test node)
-                                       :rejoined))])
-                         (into (sorted-set))))))
-    (teardown! [this test])))
 
 (defn isolator-nemesis
   "A nemesis which handles :start by isolating the nodes in the op's :value
@@ -433,9 +413,7 @@
    {#{:recover}        (recover-nemesis)
     #{:rando}          (rando-nemesis)
     {:isolate :start
-     :heal    :stop}   (isolator-nemesis)
-    {:kill    :start
-     :rejoin  :stop}   (killer-nemesis)}))
+     :heal    :stop}   (isolator-nemesis)}))
 
 ;; Generators
 
@@ -475,11 +453,9 @@
   [recovery-delay]
   (fn gen [test ctx]
     (let [minority (random-minority (:nodes test))]
-      ; TODO: This is what was written in the code, but I think it's actually
-      ; wrong: we want to isolate *then* rando, right? -KRK 2023
+      ; TODO: what happened to kill here? -KRK 2023
       [{:type :info, :f :isolate, :value minority}
        {:type :info, :f :rando, :value minority}
-       ; TODO: Is this supposed to sleep before recovery or after? -KRK 2023
        (gen/sleep (or recovery-delay 0))
        {:type :info, :f :recover, :value nil}])))
 

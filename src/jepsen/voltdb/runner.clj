@@ -30,8 +30,8 @@
 
 (def nemeses
   "All nemesis faults we know about."
-  ; TODO: add pause, kill, rando, bitflip/truncate disk files, ...
-  #{:partition :clock})
+  ; TODO: add rando, bitflip/truncate disk files, test all failure modes to make sure they work properly and the cluster actually comes back...
+  #{:partition :clock :pause :kill})
 
 (def special-nemeses
   "A map of special nemesis names to collections of faults."
