@@ -1,4 +1,6 @@
 (ns jepsen.voltdb
+  "OS and database setup functions, plus some older, currently unused nemeses
+  that should be ported over to voltdb.nemesis."
   (:require [jepsen [core         :as jepsen]
              [db           :as db]
              [control      :as c :refer [|]]
@@ -266,6 +268,7 @@
         ; Boot
         (configure! test node)
         (db/start! this test node)
+        (await-start node)
 
         ; Wait for convergence
         (jepsen/synchronize test 240)
@@ -293,8 +296,7 @@
         (cu/stop-daemon! (str base-dir "/pidfile"))))
 
     (start! [this test node]
-      (start-daemon! test)
-      (await-start node))
+      (start-daemon! test))
 
     db/Pause
     (pause! [this test node]
@@ -458,13 +460,3 @@
        {:type :info, :f :rando, :value minority}
        (gen/sleep (or recovery-delay 0))
        {:type :info, :f :recover, :value nil}])))
-
-(defn final-recovery
-  "A generator which emits a :stop, followed by a :recover, for the nemesis,
-  then sleeps to allow clients to reconnect."
-  []
-  (gen/phases
-   (gen/log "Recovering cluster")
-   (gen/nemesis {:type :info, :f :recover})
-   (gen/log "Waiting for reconnects")
-   (gen/sleep 10)))

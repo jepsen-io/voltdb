@@ -142,7 +142,7 @@
                           (gen/log "Recovering cluster")
                           (gen/nemesis (:final-generator nemesis))
                           (gen/log "Waiting for recovery")
-                          (gen/sleep 10)
+                          (gen/sleep 30)
                           ; Final generators
                           (gen/clients final))
               ; No final generator
