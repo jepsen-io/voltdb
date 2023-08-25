@@ -37,6 +37,8 @@
 (def username "voltdb")
 (def base-dir "/tmp/jepsen-voltdb")
 (def client-port 21212)
+(def export-csv-file "What file do we export CSV data to?"
+  (str base-dir "/export.csv"))
 
 (defn os
   "Given OS, plus python & jdk"
@@ -76,18 +78,29 @@
    (xml/sexp-as-element
     [:deployment {}
      [:cluster {:hostcount (count (:nodes test))
-;                  :sitesperhost 2
+                ;                  :sitesperhost 2
+                ; TODO: Make k configurable
                 :kfactor (min 4 (dec (count (:nodes test))))}]
      [:paths {}
       [:voltdbroot {:path base-dir}]]
-       ; We need to choose a heartbeat high enough so that we can spam
-       ; isolated nodes with requests *before* they kill themselves
-       ; but low enough that a new majority is elected and performs
-       ; some operations.
+     ; We need to choose a heartbeat high enough so that we can spam
+     ; isolated nodes with requests *before* they kill themselves
+     ; but low enough that a new majority is elected and performs
+     ; some operations.
      [:heartbeat {:timeout 2}] ; seconds
-       ; TODO: consider changing commandlog enabled to false to speed up startup
+     ; TODO: consider changing commandlog enabled to false to speed up startup
      [:commandlog {:enabled true, :synchronous true, :logsize 128}
-      [:frequency {:time 2}]]]))) ; milliseconds
+      [:frequency {:time 2}]] ; milliseconds
+     ; Not exactly sure what these do! Adapted from ghostbuster -- KRK 2023
+     [:systemsettings
+      [:flushinterval {:minimum 10}
+       [:export {:interval 10}]]]
+     ; Export configuration, for export tests
+     [:export
+      [:configuration {:enabled true, :target "export_target", :type "file"}
+       [:property {:name "type"} "csv"]
+       [:property {:name "nonce"} "export_target_2"]
+       [:property {:name "outdir"} export-csv-file]]]])))
 
 (defn init-db!
   "run voltdb init"

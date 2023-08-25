@@ -15,6 +15,7 @@
             [jepsen.os.debian :as debian]
             [jepsen.voltdb :as voltdb]
             [jepsen.voltdb [dirty-read :as dirty-read]
+                           [export     :as export]
                            [multi      :as multi]
                            [nemesis    :as nemesis]
                            [single     :as single]
@@ -24,6 +25,7 @@
   "A map of workload names names to functions that take CLI options and return
   workload maps"
   {:dirty-read         dirty-read/workload
+   :export             export/workload
    :multi              multi/workload
    :redundant-register redundant-register/workload
    :single             single/workload})

@@ -15,7 +15,6 @@
             [jepsen.voltdb        :as voltdb]
             [jepsen.voltdb [client :as vc]]
             [knossos.model        :as model]
-            [knossos.op           :as op]
             [clojure.string       :as str]
             [clojure.core.reducers :as r]
             [clojure.tools.logging :refer [info warn]]))
