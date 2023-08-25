@@ -38,6 +38,14 @@
   {:none []
    :all  [:partition :clock]})
 
+(def all-nemeses
+  "Combinations of nemeses we choose for test-all"
+  [[:pause]
+   [:kill]
+   [:partition]
+   [:clock]
+   [:kill :partition]])
+
 (defn parse-nemesis-spec
   "Takes a comma-separated nemesis string and returns a collection of keyword
   faults."
@@ -48,14 +56,15 @@
 
 (def opt-spec
   "Command line options for tools.cli"
-   [["-l" "--license FILE" "Path to the VoltDB license file on the control node"
-    :default "license.xml"]
+  [[nil "--concurrency NUMBER" "How many workers should we run? Must be an integer, optionally followed by n (e.g. 3n) to multiply by the number of nodes."
+    :default  "4n"
+    :validate [(partial re-find #"^\d+n?$")
+               "Must be an integer, optionally followed by n."]]
 
-   [nil "--recovery-delay SECONDS"
-    "How long should we wait before killing nodes and recovering?"
-    :default 0
-    :parse-fn #(Long/parseLong %)
-    :validate [pos? "Must be positive"]]
+   [nil "--force-download" "Re-download tarballs, even if cached locally"]
+
+   ["-l" "--license FILE" "Path to the VoltDB license file on the control node"
+    :default "license.xml"]
 
    [nil "--nemesis FAULTS" "A comma-separated list of faults to inject."
     :parse-fn parse-nemesis-spec
@@ -65,28 +74,34 @@
                (cli/one-of (concat nemeses (keys special-nemeses)))]]
 
    [nil "--nemesis-interval SECONDS" "How long between nemesis operations, on average, for each class of fault?"
-    :default  10
+    ; In my testing, Volt often takes 20 seconds or so just to start up--we
+    ; don't want to go too fast here.
+    :default  30
     :parse-fn read-string
     :validate [pos? "must be positive"]]
 
    [nil "--no-reads" "Disable reads, to test write safety only"]
-
-   ["-r" "--rate HZ" "Approximate number of requests per second, total"
-    :default 100
-    :parse-fn read-string
-    :validate [#(and (number? %) (pos? %)) "must be a positive number"]]
-
-   [nil "--strong-reads" "Use stored procedure including a write for all reads"]
-
-   [nil "--skip-os" "Don't perform OS setup"]
-
-   [nil "--force-download" "Re-download tarballs, even if cached locally"]
 
    ["-p" "--procedure-call-timeout MILLISECONDS"
     "How long should we wait before timing out procedure calls?"
     :default 1000
     :parse-fn #(Long/parseLong %)
     :validate [pos? "Must be positive"]]
+
+   ["-r" "--rate HZ" "Approximate number of requests per second, total"
+    :default 100
+    :parse-fn read-string
+    :validate [#(and (number? %) (pos? %)) "must be a positive number"]]
+
+   [nil "--recovery-delay SECONDS"
+    "How long should we wait before killing nodes and recovering?"
+    :default 0
+    :parse-fn #(Long/parseLong %)
+    :validate [pos? "Must be positive"]]
+
+   [nil "--strong-reads" "Use stored procedure including a write for all reads"]
+
+   [nil "--skip-os" "Don't perform OS setup"]
 
    ["-u" "--tarball URL" "URL for the VoltDB tarball to install. May be either HTTP, HTTPS, or a local file on this control node. For instance, --tarball https://foo.com/voltdb-ent.tar.gz, or file://voltdb-ent.tar.gz"
     :validate [(partial re-find #"^(file|https?)://.*\.(tar)")
